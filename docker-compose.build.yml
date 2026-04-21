@@ -1,0 +1,37 @@
+# docker-compose.build.yml
+#
+# 专用于「构建 + 打标签」的 compose 文件，不会启动任何服务。
+# 放在仓库根目录，与 Dockerfile 同级。
+#
+# 使用方式（构建机）：
+#   export DOCKERHUB_USER=your-dockerhub-username
+#   export IMAGE_TAG=$(cat VERSION)-$(git rev-parse --short HEAD)
+#   docker compose -f docker-compose.build.yml build --pull
+#
+# 构建产物：
+#   - <DOCKERHUB_USER>/nexapi:<IMAGE_TAG>
+#   - <DOCKERHUB_USER>/nexapi:latest
+#
+# 推送到 Docker Hub：
+#   docker login
+#   docker push ${DOCKERHUB_USER}/nexapi:${IMAGE_TAG}
+#   docker push ${DOCKERHUB_USER}/nexapi:latest
+
+services:
+  nexapi-builder:
+    # image 字段在 build 时会作为主标签写入
+    image: ${DOCKERHUB_USER:-local}/nexapi:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # 默认只构建当前主机架构；如需多架构请改用 docker buildx bake
+      # platforms:
+      #   - linux/amd64
+      #   - linux/arm64
+      # 追加第二个 tag: latest，构建完 image 字段 + tags 两个标签都会指向同一镜像
+      tags:
+        - ${DOCKERHUB_USER:-local}/nexapi:latest
+    # 关键：不指定 command 且永不启动。compose build 只会构建镜像，不会 run。
+    # 即便误触 `docker compose up`，此 profile 也不会被默认拉起。
+    profiles:
+      - build-only

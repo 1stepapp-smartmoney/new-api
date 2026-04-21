@@ -81,6 +81,9 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
   const [uptimeLoading, setUptimeLoading] = useState(false);
   const [activeUptimeTab, setActiveUptimeTab] = useState('');
 
+  // ========== 模型筛选下拉候选 ==========
+  const [modelOptions, setModelOptions] = useState([]);
+
   // ========== 常量 ==========
   const now = new Date();
   const isAdminUser = isAdmin();
@@ -160,14 +163,16 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
     setLoading(true);
     try {
       let url = '';
-      const { start_timestamp, end_timestamp, username } = inputs;
+      const { start_timestamp, end_timestamp, username, model_name } = inputs;
       let localStartTimestamp = Date.parse(start_timestamp) / 1000;
       let localEndTimestamp = Date.parse(end_timestamp) / 1000;
+      const encodedModelName = encodeURIComponent(model_name || '');
+      const encodedUsername = encodeURIComponent(username || '');
 
       if (isAdminUser) {
-        url = `/api/data/?username=${username}&start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}&default_time=${dataExportDefaultTime}`;
+        url = `/api/data/?username=${encodedUsername}&start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}&default_time=${dataExportDefaultTime}&model_name=${encodedModelName}`;
       } else {
-        url = `/api/data/self/?start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}&default_time=${dataExportDefaultTime}`;
+        url = `/api/data/self/?start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}&default_time=${dataExportDefaultTime}&model_name=${encodedModelName}`;
       }
 
       const res = await API.get(url);
@@ -216,10 +221,11 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
   const loadUserQuotaData = useCallback(async () => {
     if (!isAdminUser) return [];
     try {
-      const { start_timestamp, end_timestamp } = inputs;
+      const { start_timestamp, end_timestamp, model_name } = inputs;
       const localStartTimestamp = Date.parse(start_timestamp) / 1000;
       const localEndTimestamp = Date.parse(end_timestamp) / 1000;
-      const url = `/api/data/users?start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}`;
+      const encodedModelName = encodeURIComponent(model_name || '');
+      const url = `/api/data/users?start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}&model_name=${encodedModelName}`;
       const res = await API.get(url);
       const { success, message, data } = res.data;
       if (success) {
@@ -233,6 +239,18 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
       return [];
     }
   }, [inputs, isAdminUser]);
+
+  const loadModelOptions = useCallback(async () => {
+    try {
+      const res = await API.get('/api/data/models');
+      const { success, data } = res.data;
+      if (success && Array.isArray(data)) {
+        setModelOptions(data.filter((name) => !!name));
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  }, []);
 
   const getUserData = useCallback(async () => {
     let res = await API.get(`/api/user/self`);
@@ -272,9 +290,10 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
   useEffect(() => {
     if (!initialized.current) {
       getUserData();
+      loadModelOptions();
       initialized.current = true;
     }
-  }, [getUserData]);
+  }, [getUserData, loadModelOptions]);
 
   return {
     // 基础状态
@@ -314,6 +333,10 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
     uptimeLoading,
     activeUptimeTab,
     setActiveUptimeTab,
+
+    // 模型筛选候选
+    modelOptions,
+    loadModelOptions,
 
     // 计算值
     timeOptions,

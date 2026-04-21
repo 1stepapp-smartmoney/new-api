@@ -29,6 +29,7 @@ const SearchModal = ({
   inputs,
   dataExportDefaultTime,
   timeOptions,
+  modelOptions = [],
   handleInputChange,
   t,
 }) => {
@@ -42,7 +43,12 @@ const SearchModal = ({
     <Component {...FORM_FIELD_PROPS} {...props} />
   );
 
-  const { start_timestamp, end_timestamp, username } = inputs;
+  const { start_timestamp, end_timestamp, username, model_name } = inputs;
+
+  const modelSelectOptions = [
+    { label: t('全部模型'), value: '' },
+    ...modelOptions.map((name) => ({ label: name, value: name })),
+  ];
 
   return (
     <Modal
@@ -84,6 +90,19 @@ const SearchModal = ({
           optionList: timeOptions,
           onChange: (value) =>
             handleInputChange(value, 'data_export_default_time'),
+        })}
+
+        {createFormField(Form.Select, {
+          field: 'model_name',
+          label: t('模型'),
+          initValue: model_name || '',
+          value: model_name || '',
+          placeholder: t('全部模型'),
+          name: 'model_name',
+          optionList: modelSelectOptions,
+          filter: true,
+          showClear: true,
+          onChange: (value) => handleInputChange(value || '', 'model_name'),
         })}
 
         {isAdminUser &&

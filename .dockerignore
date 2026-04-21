@@ -1,10 +1,67 @@
-.github
+# ===== 版本控制与 IDE =====
 .git
-*.md
-.vscode
+.github
 .gitignore
-Makefile
-docs
-.eslintcache
+.gitattributes
+.vscode
+.idea
+.zed
+.history
+.DS_Store
+
+# ===== 运行时数据（绝不能进镜像） =====
+data
+data/
+logs
+upload
+tiktoken_cache
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# ===== 环境变量与密钥 =====
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa*
+
+# ===== 前端构建产物与依赖（镜像内会重新产生） =====
+web/node_modules
+web/dist
+web/.vite
+web/.eslintcache
+electron/node_modules
+electron/dist
+
+# ===== Go 本地产物与缓存 =====
+new-api
+one-api
+*.exe
+build
+__debug_bin*
 .gocache
-/web/node_modules
+.gocache-temp
+.gomodcache
+.gomodcache/
+.gopath
+.cache
+
+# ===== 文档与杂项（镜像运行时用不到） =====
+*.md
+!VERSION
+docs
+Makefile
+plans
+.claude
+
+# ===== Docker 自身（构建时由 CLI 读取，镜像内不需要） =====
+Dockerfile*
+docker-compose*.yml
+docker-compose*.yaml
+.dockerignore
+
+# ===== 测试辅助文件 =====
+token_estimator_test.go

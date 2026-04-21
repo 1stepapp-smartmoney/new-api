@@ -14,7 +14,8 @@ func GetAllQuotaDates(c *gin.Context) {
 	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
 	username := c.Query("username")
-	dates, err := model.GetAllQuotaDates(startTimestamp, endTimestamp, username)
+	modelName := c.Query("model_name")
+	dates, err := model.GetAllQuotaDates(startTimestamp, endTimestamp, username, modelName)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -30,7 +31,8 @@ func GetAllQuotaDates(c *gin.Context) {
 func GetQuotaDatesByUser(c *gin.Context) {
 	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
-	dates, err := model.GetQuotaDataGroupByUser(startTimestamp, endTimestamp)
+	modelName := c.Query("model_name")
+	dates, err := model.GetQuotaDataGroupByUser(startTimestamp, endTimestamp, modelName)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -46,6 +48,7 @@ func GetUserQuotaDates(c *gin.Context) {
 	userId := c.GetInt("id")
 	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
+	modelName := c.Query("model_name")
 	// 判断时间跨度是否超过 1 个月
 	if endTimestamp-startTimestamp > 2592000 {
 		c.JSON(http.StatusOK, gin.H{
@@ -54,7 +57,7 @@ func GetUserQuotaDates(c *gin.Context) {
 		})
 		return
 	}
-	dates, err := model.GetQuotaDataByUserId(userId, startTimestamp, endTimestamp)
+	dates, err := model.GetQuotaDataByUserId(userId, startTimestamp, endTimestamp, modelName)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -65,4 +68,21 @@ func GetUserQuotaDates(c *gin.Context) {
 		"data":    dates,
 	})
 	return
+}
+
+// GetQuotaDataModels 返回用于看板筛选的可选模型名列表。
+// 管理员能看到全部；普通用户只看到自己产生过数据的模型。
+func GetQuotaDataModels(c *gin.Context) {
+	userId := c.GetInt("id")
+	role := c.GetInt("role")
+	names, err := model.GetDistinctModelNames(userId, role >= common.RoleAdminUser)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data":    names,
+	})
 }

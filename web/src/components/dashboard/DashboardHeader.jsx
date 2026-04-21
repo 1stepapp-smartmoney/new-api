@@ -44,8 +44,10 @@ const DashboardHeader = ({
           type='tertiary'
           icon={<Search size={16} />}
           onClick={showSearchModal}
-          className={`bg-green-500 hover:bg-green-600 ${ICON_BUTTON_CLASS}`}
-        />
+          className={`bg-green-500 hover:bg-green-600 text-white hover:bg-opacity-80 !rounded-full`}
+        >
+          {t('条件筛选')}
+        </Button>
         <Button
           type='tertiary'
           icon={<RefreshCw size={16} />}

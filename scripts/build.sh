@@ -27,9 +27,10 @@ DOCKERHUB_REPO="nexapi"
 # 规则：首字符必须是字母或数字；只能含 [A-Za-z0-9._-]
 APP_VERSION="v0.12.14"
 
-# 镜像 tag——默认与 APP_VERSION 一致；想区分版本号与镜像 tag 可单独改
-# 例如 IMAGE_TAG="${APP_VERSION}-custom-$(git rev-parse --short HEAD)"
-IMAGE_TAG="${APP_VERSION}"
+# 镜像 tag——APP_VERSION 加 git short hash 后缀，避免同一版本号重复构建覆盖干净 tag
+# 产物示例：zjlywjh001/nexapi:v0.12.14-ba9525e
+# 首次某 APP_VERSION 发布时若想保留"干净 tag"（如 v0.12.14），可手动 docker tag + push。
+IMAGE_TAG="${APP_VERSION}-$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
 
 # 是否同时打 latest 标签并推送（true / false）
 PUSH_LATEST="true"

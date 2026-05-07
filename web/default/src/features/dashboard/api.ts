@@ -17,6 +17,7 @@ export async function getUserQuotaDates(
     end_timestamp: number
     default_time?: string
     username?: string
+    model_name?: string
   },
   isAdmin = false
 ) {
@@ -35,10 +36,22 @@ export async function getUserQuotaDates(
 export async function getUserQuotaDataByUsers(params: {
   start_timestamp: number
   end_timestamp: number
+  model_name?: string
 }) {
   const res = await api.get<{ success: boolean; data: QuotaDataItem[] }>(
     '/api/data/users',
     { params }
+  )
+  return res.data
+}
+
+// ----------------------------------------------------------------------------
+// Available model names for dashboard filter dropdown
+// ----------------------------------------------------------------------------
+
+export async function getQuotaDataModels() {
+  const res = await api.get<{ success: boolean; data: string[] }>(
+    '/api/data/models'
   )
   return res.data
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Filter, RotateCcw, Calendar, Search } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/stores/auth-store'
@@ -26,6 +26,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { DateTimePicker } from '@/components/datetime-picker'
+import { getQuotaDataModels } from '@/features/dashboard/api'
 import {
   TIME_GRANULARITY_OPTIONS,
   TIME_RANGE_PRESETS,
@@ -38,6 +39,8 @@ import type {
   DashboardChartPreferences,
   DashboardFilters,
 } from '@/features/dashboard/types'
+
+const ALL_MODELS_VALUE = '__all__'
 
 interface ModelsFilterProps {
   preferences: DashboardChartPreferences
@@ -72,6 +75,30 @@ export function ModelsFilter(props: ModelsFilterProps) {
   const [selectedRange, setSelectedRange] = useState<number | null>(
     () => props.preferences.defaultTimeRangeDays
   )
+  const [modelOptions, setModelOptions] = useState<string[]>([])
+  const [modelsLoaded, setModelsLoaded] = useState(false)
+
+  // 第一次打开对话框时拉取可选模型列表，避免页面初始化阶段就触发请求。
+  useEffect(() => {
+    if (!open || modelsLoaded) return
+    let cancelled = false
+    getQuotaDataModels()
+      .then((res) => {
+        if (cancelled) return
+        if (res?.success && Array.isArray(res.data)) {
+          setModelOptions(res.data.filter(Boolean))
+        }
+      })
+      .catch(() => {
+        // 静默失败：模型列表是辅助筛选，不应阻塞其他过滤项
+      })
+      .finally(() => {
+        if (!cancelled) setModelsLoaded(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, modelsLoaded])
 
   const resetFiltersFromPreferences = () => {
     setFilters(buildDefaultDashboardFilters(props.preferences))
@@ -222,6 +249,46 @@ export function ModelsFilter(props: ModelsFilterProps) {
                     {TIME_GRANULARITY_OPTIONS.map((option) => (
                       <SelectItem key={option.value} value={option.value}>
                         {t(option.label)}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <SectionDivider label={t('Data Filters')} />
+
+            {/* Model name filter (available to all users) */}
+            <div className='grid gap-2'>
+              <Label htmlFor='model_name'>{t('Model')}</Label>
+              <Select
+                items={[
+                  { value: ALL_MODELS_VALUE, label: t('All Models') },
+                  ...modelOptions.map((name) => ({ value: name, label: name })),
+                ]}
+                value={
+                  filters.model_name && filters.model_name.length > 0
+                    ? filters.model_name
+                    : ALL_MODELS_VALUE
+                }
+                onValueChange={(value) =>
+                  handleChange(
+                    'model_name',
+                    value === ALL_MODELS_VALUE ? '' : value
+                  )
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={t('Filter by model')} />
+                </SelectTrigger>
+                <SelectContent alignItemWithTrigger={false}>
+                  <SelectGroup>
+                    <SelectItem value={ALL_MODELS_VALUE}>
+                      {t('All Models')}
+                    </SelectItem>
+                    {modelOptions.map((name) => (
+                      <SelectItem key={name} value={name}>
+                        {name}
                       </SelectItem>
                     ))}
                   </SelectGroup>

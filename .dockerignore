@@ -29,8 +29,12 @@ tiktoken_cache
 id_rsa*
 
 # ===== 前端构建产物与依赖（镜像内会重新产生） =====
-web/node_modules
-web/dist
+# upstream 已把 web/ 拆为 default + classic，分别有自己的 node_modules / dist
+/web/node_modules
+/web/default/node_modules
+/web/default/dist
+/web/classic/node_modules
+/web/classic/dist
 web/.vite
 web/.eslintcache
 electron/node_modules
@@ -52,6 +56,8 @@ __debug_bin*
 # ===== 文档与杂项（镜像运行时用不到） =====
 *.md
 !VERSION
+# upstream 通过 docker build 把 THIRD-PARTY-LICENSES.md 复制到镜像内（合规要求），不能被 *.md 吞掉
+!THIRD-PARTY-LICENSES.md
 docs
 Makefile
 plans

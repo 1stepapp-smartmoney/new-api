@@ -25,7 +25,7 @@ DOCKERHUB_REPO="nexapi"
 # 应用版本号——**这个值会被后台「其他设置」页显示**，也会被注入到二进制（common.Version）
 # 建议对齐上游最新 release（如 v0.10.0），以便内置的「检查更新」按钮能正确比对
 # 规则：首字符必须是字母或数字；只能含 [A-Za-z0-9._-]
-APP_VERSION="v1.0.0-rc.6"
+APP_VERSION="v1.0.0-rc.10"
 
 # 镜像 tag——APP_VERSION 加 git short hash 后缀，避免同一版本号重复构建覆盖干净 tag
 # 产物示例：zjlywjh001/nexapi:v0.12.14-ba9525e

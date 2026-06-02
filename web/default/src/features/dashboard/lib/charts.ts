@@ -60,13 +60,42 @@ function getThemeChartColors(themeKey?: string): string[] {
   }).filter(Boolean)
 }
 
+// Generate N visually distinct colors via golden-angle hue rotation.
+// Consecutive hues are spaced ~137.5° apart so neighbouring series never
+// land on close colors; alternating saturation/lightness bands further
+// separate hues that eventually wrap around the circle. Used to extend a
+// base palette instead of the old `index % palette.length` repetition,
+// which produced exact-duplicate colors once series exceeded the palette.
+function generateDistinctColors(count: number, startIndex = 0): string[] {
+  const GOLDEN_ANGLE = 137.508
+  const bands = [
+    { s: 70, l: 55 },
+    { s: 58, l: 42 },
+    { s: 82, l: 66 },
+    { s: 48, l: 50 },
+  ]
+  return Array.from({ length: Math.max(count, 0) }, (_, i) => {
+    const idx = startIndex + i
+    const hue = (idx * GOLDEN_ANGLE) % 360
+    const band = bands[idx % bands.length]
+    return `hsl(${hue.toFixed(1)}, ${band.s}%, ${band.l}%)`
+  })
+}
+
+// Return exactly `count` colors. Branded base colors are kept for the first
+// slots (preserving the theme look for the common small-series case); any
+// extra slots are filled with generated distinct colors so large model sets
+// never reuse / collide on colors.
+function expandPalette(base: string[], count: number): string[] {
+  if (count <= base.length) return base.slice(0, count)
+  if (base.length === 0) return generateDistinctColors(count)
+  return [...base, ...generateDistinctColors(count - base.length, base.length)]
+}
+
 function getVChartDefaultColors(domainLength: number, themeKey?: string) {
   const themeColors = getThemeChartColors(themeKey)
   if (themeColors.length > 0) {
-    return Array.from(
-      { length: Math.max(domainLength, themeColors.length) },
-      (_, index) => themeColors[index % themeColors.length]
-    )
+    return expandPalette(themeColors, domainLength)
   }
 
   const scheme =
@@ -74,7 +103,7 @@ function getVChartDefaultColors(domainLength: number, themeKey?: string) {
       (item) => !item.maxDomainLength || domainLength <= item.maxDomainLength
     ) ?? vchartDefaultDataScheme[vchartDefaultDataScheme.length - 1]
 
-  return scheme.scheme
+  return expandPalette(scheme.scheme, domainLength)
 }
 
 function renderQuotaCompat(rawQuota: number, digits = 4): string {
@@ -745,11 +774,8 @@ export function processUserChartData(
   const themeUserColors = getThemeChartColors(themeKey)
   const userColorRange =
     themeUserColors.length > 0
-      ? Array.from(
-          { length: Math.max(limit, themeUserColors.length) },
-          (_, index) => themeUserColors[index % themeUserColors.length]
-        )
-      : USER_COLOR_FALLBACKS
+      ? expandPalette(themeUserColors, Math.max(limit, themeUserColors.length))
+      : expandPalette(USER_COLOR_FALLBACKS, limit)
 
   const formatVal = (raw: number) => renderQuotaCompat(raw, 2)
 

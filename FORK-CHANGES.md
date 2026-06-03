@@ -161,6 +161,57 @@ official upstream solution** that solves the same problem.
   If upstream lands an equivalent operator toggle and an `ip` query
   parameter, drop the local diff and switch to the upstream knob.
 
+### 5. MySQL USE INDEX hint for log queries filtered by username
+
+- **Why**: On large `logs` tables where one user holds most of the rows
+  (e.g. a load-test or migration account producing ~50 % of the data),
+  MySQL's cost-based optimizer mis-estimates the composite username
+  index as more expensive than a full table scan. A 24-hour
+  `SumUsedQuota` runs in ~3 s with the index but ~40 s without — and
+  worse, the optimizer keeps picking the slow plan even after
+  `ANALYZE TABLE`. The log-stat endpoint fires on every visit to the
+  usage-logs page, so the regression is user-visible (page hangs for
+  ~75 s).
+- **Operator prerequisite**: a composite index
+  `idx_username_created_type (username, created_at, type)` must exist
+  on the `logs` table. Created in production via:
+  ```sql
+  ALTER TABLE logs
+    ADD INDEX idx_user_created (user_id, created_at),
+    ALGORITHM=INPLACE, LOCK=NONE;
+  ALTER TABLE logs
+    ADD INDEX idx_username_created_type (username, created_at, type),
+    ALGORITHM=INPLACE, LOCK=NONE;
+  -- and drop the now-redundant single-column index:
+  ALTER TABLE logs DROP INDEX idx_logs_username,
+    ALGORITHM=INPLACE, LOCK=NONE;
+  ```
+  Upstream auto-migration does NOT create these indexes. New deployments
+  need to run them manually.
+- **Local commit**: `fix(log): use composite index hint on MySQL for
+  username-filtered log queries`.
+- **Touched files**: `model/log.go` only.
+- **Behaviour**:
+  - New helper `logsTableExprForUsername(username)`. Returns
+    `"logs USE INDEX (idx_username_created_type)"` if MySQL is the
+    active dialect AND a non-empty `username` is being filtered;
+    otherwise returns `"logs"`.
+  - `SumUsedQuota` and `GetAllLogs` use it when constructing their
+    GORM `Table(...)` expression. SQLite / PostgreSQL paths are
+    untouched (those dialects don't understand `USE INDEX` syntax and
+    don't suffer the optimizer mis-estimate).
+- **Upstream adoption check**:
+  ```bash
+  # If upstream rewrites the stat queries (e.g. adds materialized
+  # aggregates, a separate stats table, or its own hint mechanism) the
+  # local hint may become redundant.
+  git log upstream/main --oneline -- model/log.go \
+  | grep -iE "stat|index|hint|sumused|optimizer"
+  git grep -n "USE INDEX\|FORCE INDEX" upstream/main -- model/log.go
+  ```
+  If upstream switches to a materialized aggregate or a different
+  schema-level fix that obviates the hint, drop the local helper.
+
 ---
 
 ## Tooling / packaging customizations (kept regardless of upstream)

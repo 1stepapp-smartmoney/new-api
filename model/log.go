@@ -320,11 +320,11 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 }
 
 func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string, ip string) (logs []*Log, total int64, err error) {
-	var tx *gorm.DB
-	if logType == LogTypeUnknown {
-		tx = LOG_DB
-	} else {
-		tx = LOG_DB.Where("logs.type = ?", logType)
+	// Force the (username, created_at, type) composite index on MySQL when an
+	// admin searches by username. See logsTableExprForUsername for rationale.
+	tx := LOG_DB.Table(logsTableExprForUsername(username))
+	if logType != LogTypeUnknown {
+		tx = tx.Where("logs.type = ?", logType)
 	}
 
 	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", modelName); err != nil {
@@ -476,11 +476,28 @@ type Stat struct {
 	Tpm   int `json:"tpm"`
 }
 
+// logsTableExprForUsername returns the FROM-clause expression for queries
+// filtered by `username`. On MySQL we force the (username, created_at, type)
+// composite index because the cost-based optimizer underweights the heavy
+// users: when a single user holds the majority of the rows (e.g. a load-test
+// account producing ~50% of the table) MySQL estimates a full-table scan as
+// cheaper and finishes in ~40 s, while the composite index runs in ~3 s.
+// SQLite and PostgreSQL don't have this problem (different optimizers) and
+// also don't accept the `USE INDEX` syntax — so we only inject the hint on
+// MySQL and only when a username filter is actually present.
+func logsTableExprForUsername(username string) string {
+	if username != "" && common.UsingMySQL {
+		return "logs USE INDEX (idx_username_created_type)"
+	}
+	return "logs"
+}
+
 func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
-	tx := LOG_DB.Table("logs").Select("sum(quota) quota")
+	tableExpr := logsTableExprForUsername(username)
+	tx := LOG_DB.Table(tableExpr).Select("sum(quota) quota")
 
 	// 为rpm和tpm创建单独的查询
-	rpmTpmQuery := LOG_DB.Table("logs").Select("count(*) rpm, sum(prompt_tokens) + sum(completion_tokens) tpm")
+	rpmTpmQuery := LOG_DB.Table(tableExpr).Select("count(*) rpm, sum(prompt_tokens) + sum(completion_tokens) tpm")
 
 	if tx, err = applyExplicitLogTextFilter(tx, "username", username); err != nil {
 		return stat, err

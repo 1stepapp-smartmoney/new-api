@@ -249,6 +249,13 @@ deployed**. They should remain even if upstream adds similar tooling.
   `APP_VERSION` and writes the version into the `VERSION` file before
   invoking the build. `APP_VERSION` should be bumped to the latest upstream
   release tag on every upstream merge.
+- `deploy/docker-compose.prod.yml` — tracked copy of the **production**
+  compose file used on the RDS-backed deployment (nexapi.org). The root
+  `docker-compose.yml` is the upstream demo template with bundled postgres
+  + redis containers and is NOT what production uses. Production keeps its
+  own copy at `~/new-api-docker/docker-compose.yml` on the host; sync it
+  with `deploy/docker-compose.prod.yml` whenever either changes. See
+  `deploy/README.md` for the workflow.
 
 ---
 

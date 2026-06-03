@@ -1,0 +1,55 @@
+# Production docker-compose for the RDS-backed deployment (e.g. nexapi.org).
+#
+# This file connects to managed MySQL (Aliyun RDS) and managed Redis instead
+# of running them as sidecar containers. Secrets (SQL_DSN, REDIS_CONN_STRING,
+# SESSION_SECRET, CRYPTO_SECRET, etc.) are loaded from `.env`, which is NOT
+# checked in to git.
+#
+# Sync this file with the live `~/new-api-docker/docker-compose.yml` on the
+# server. To verify a server matches the tracked version:
+#
+#   diff <(sudo cat ~/new-api-docker/docker-compose.yml) deploy/docker-compose.prod.yml
+#
+# To deploy a new image:
+#
+#   cd ~/new-api-docker
+#   sudo docker compose pull
+#   sudo docker compose up -d
+#
+# (Used by https://nexapi.org. The root `docker-compose.yml` is the upstream
+#  demo template with bundled postgres + redis; do not use it for prod.)
+
+services:
+  new-api:
+    image: zjlywjh001/nexapi:latest
+    pull_policy: always
+    container_name: new-api
+    restart: always
+    command: --log-dir /app/logs
+    env_file:
+      - .env
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/data
+      - ./logs:/app/logs
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O - http://localhost:3000/api/status | grep -o '\"success\":\\s*true' || exit 1"
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Startup grace period. GORM AutoMigrate on a multi-million-row `logs`
+      # table can take ~130s when a declared index is missing (see
+      # FORK-CHANGES.md §5 "Operational trap"); without this, the container
+      # is reported unhealthy during the rebuild and upstream proxies / load
+      # balancers may stop sending traffic.
+      start_period: 180s
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "3"

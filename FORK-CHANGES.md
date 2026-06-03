@@ -119,8 +119,10 @@ official upstream solution** that solves the same problem.
     `…/components/common-logs-filter-bar.tsx` (IP input wrapped in
     `{isRoot && …}`, `expandedFilterCount` only counts `ip` for root),
     `…/components/columns/common-logs-columns.tsx`
-    (`useCommonLogsColumns` accepts `isRoot` and threads it into the
-    details dialog), `…/components/dialogs/details-dialog.tsx`
+    (`useCommonLogsColumns` accepts `isRoot`, threads it into the details
+    dialog, and renders a root-only `id: 'ip'` column with truncated
+    monospace cell + tooltip + sensitive-visible masking),
+    `…/components/dialogs/details-dialog.tsx`
     (`showAdminIp` simplified to `!!log.ip && isRoot`),
     `…/components/usage-logs-table.tsx` (call `useIsRoot()` and pass
     through), `web/default/src/routes/_authenticated/usage-logs/$section.tsx`
@@ -133,9 +135,10 @@ official upstream solution** that solves the same problem.
   - Viewing and filtering IPs is **root-only**. Non-root admins and
     regular users:
     1. don't see the "Filter by IP" input at all in the usage-logs UI,
-    2. don't see the "IP Address" row in the log details dialog,
-    3. receive log payloads with the `ip` field empty,
-    4. can't bypass via URL: `?ip=` is silently ignored, and the field
+    2. don't see an "IP Address" column in the log table,
+    3. don't see the "IP Address" row in the log details dialog,
+    4. receive log payloads with the `ip` field empty,
+    5. can't bypass via URL: `?ip=` is silently ignored, and the field
        is stripped from the response.
   - Root sees: input filter accepting exact (`157.15.200.38`),
     suffix (`*.108.196`), prefix (`192.169.*`) or arbitrary wildcard

@@ -468,6 +468,45 @@ export function useCommonLogsColumns(
     )
   }
 
+  // Root-only IP column. Mirrors the admin block above but is gated on the
+  // stronger `isRoot` predicate. The backend already strips `Log.Ip` for
+  // non-root callers (controller/log.go), so even if a non-root user
+  // un-hid the column via dev-tools the cell would render empty.
+  if (isRoot) {
+    columns.push({
+      id: 'ip',
+      accessorFn: (row) => row.ip,
+      header: ({ column }) => (
+        <DataTableColumnHeader column={column} title={t('IP Address')} />
+      ),
+      cell: function IpCell({ row }) {
+        const { sensitiveVisible } = useUsageLogsContext()
+        const log = row.original
+        if (!log.ip) return <span className='text-muted-foreground/40'>—</span>
+        const display = sensitiveVisible ? log.ip : '••••'
+        return (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span className='text-muted-foreground max-w-[140px] truncate font-mono text-xs' />
+                }
+              >
+                {display}
+              </TooltipTrigger>
+              {sensitiveVisible && (
+                <TooltipContent side='top'>{log.ip}</TooltipContent>
+              )}
+            </Tooltip>
+          </TooltipProvider>
+        )
+      },
+      enableSorting: false,
+      meta: { label: t('IP Address') },
+      size: 150,
+    })
+  }
+
   columns.push({
     accessorKey: 'token_name',
     header: ({ column }) => (

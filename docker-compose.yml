@@ -51,6 +51,11 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+      # 启动期最长允许 3 分钟不健康 —— GORM AutoMigrate 在大 logs 表上
+      # 重建索引（如 idx_logs_username 被手动删除后 GORM 会自动重建）
+      # 可能耗时 ~130 秒，期间 /api/status 不可用。start_period 期间
+      # healthcheck 失败不计入 retries，避免容器被标 unhealthy 触发上游摘流。
+      start_period: 180s
 
   redis:
     image: redis:latest

@@ -172,18 +172,14 @@ official upstream solution** that solves the same problem.
   `ANALYZE TABLE`. The log-stat endpoint fires on every visit to the
   usage-logs page, so the regression is user-visible (page hangs for
   ~75 s).
-- **Operator prerequisite**: a composite index
-  `idx_username_created_type (username, created_at, type)` must exist
-  on the `logs` table. Created in production via:
+- **Operator prerequisite**: composite indexes must exist on `logs`. Run
+  in production via:
   ```sql
   ALTER TABLE logs
     ADD INDEX idx_user_created (user_id, created_at),
     ALGORITHM=INPLACE, LOCK=NONE;
   ALTER TABLE logs
     ADD INDEX idx_username_created_type (username, created_at, type),
-    ALGORITHM=INPLACE, LOCK=NONE;
-  -- and drop the now-redundant single-column index:
-  ALTER TABLE logs DROP INDEX idx_logs_username,
     ALGORITHM=INPLACE, LOCK=NONE;
   ```
   Upstream auto-migration does NOT create these indexes. New deployments
@@ -211,6 +207,32 @@ official upstream solution** that solves the same problem.
   ```
   If upstream switches to a materialized aggregate or a different
   schema-level fix that obviates the hint, drop the local helper.
+
+#### ⚠ Operational trap — DO NOT delete `idx_logs_username`
+
+The `Log` struct in `model/log.go` declares `Username string
+\`gorm:"index;..."\``. GORM's AutoMigrate runs on every container
+start and **automatically recreates** any indexes declared on the
+struct that are missing from the live schema. On the production
+~10 M-row `logs` table, recreating `idx_logs_username` takes
+**~130 seconds** and blocks `/api/status`, marking the container
+unhealthy during the rebuild.
+
+Rules of thumb:
+- **Do not** `ALTER TABLE logs DROP INDEX idx_logs_username` on any
+  environment that has accumulated significant log volume.
+- The single-column index can safely coexist with
+  `idx_username_created_type` (~1.5 GB extra space). The Go-side
+  `USE INDEX` hint above forces the correct index for the hot path
+  regardless of which indexes are present.
+- If you ever need to drop it (e.g. disk pressure), also strip the
+  `index` tag from the `Username` struct field in the same commit;
+  otherwise the next container start will silently rebuild it.
+
+The compose file's healthcheck has `start_period: 180s` to make
+this scenario survivable: if the index ever does need to rebuild,
+the container won't be reported unhealthy and traffic-routing /
+orchestrator behaviour stays normal during the migration.
 
 ---
 

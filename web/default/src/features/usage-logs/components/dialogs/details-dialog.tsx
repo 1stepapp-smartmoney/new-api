@@ -394,6 +394,7 @@ function TokenBreakdown(props: { log: UsageLog; other: LogOtherData }) {
 interface DetailsDialogProps {
   log: UsageLog
   isAdmin: boolean
+  isRoot: boolean
   open: boolean
   onOpenChange: (open: boolean) => void
 }
@@ -418,8 +419,12 @@ export function DetailsDialog(props: DetailsDialogProps) {
     !!other?.expr_b64
   const hasAudioTokens = other?.ws || other?.audio
   const showTiming = isTimingLogType(props.log.type)
-  const showAdminIp =
-    !!props.log.ip && (showTiming || (props.isAdmin && isTopup))
+  // IP is operator-only. Even if a legacy log row carries an IP (e.g. from
+  // before the per-user opt-in was tightened, or from `FORCE_RECORD_IP_LOG`),
+  // only root sees it. The backend additionally strips `ip` from non-root
+  // responses, so for non-root callers `props.log.ip` will be empty anyway —
+  // this client-side guard is a defence-in-depth.
+  const showAdminIp = !!props.log.ip && props.isRoot
   const adminInfo = other?.admin_info
   const topupAuditFields =
     isTopup && props.isAdmin && adminInfo

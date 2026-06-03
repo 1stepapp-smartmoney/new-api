@@ -23,6 +23,7 @@ import { type Table } from '@tanstack/react-table'
 import { Eye, EyeOff } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useIsAdmin } from '@/hooks/use-admin'
+import { useIsRoot } from '@/hooks/use-root'
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -71,6 +72,7 @@ export function CommonLogsFilterBar<TData>(
   const queryClient = useQueryClient()
   const searchParams = route.useSearch()
   const isAdmin = useIsAdmin()
+  const isRoot = useIsRoot()
   const { sensitiveVisible, setSensitiveVisible } = useUsageLogsContext()
   const fetchingLogs = useIsFetching({ queryKey: ['logs'] })
 
@@ -174,7 +176,7 @@ export function CommonLogsFilterBar<TData>(
     !!filters.channel ||
     !!filters.requestId ||
     !!filters.upstreamRequestId ||
-    !!filters.ip
+    (isRoot && !!filters.ip)
 
   const hasTypeFilter = logType !== LOG_TYPE_ALL_VALUE
   const hasAdditionalFilters =
@@ -186,7 +188,7 @@ export function CommonLogsFilterBar<TData>(
     isAdmin ? filters.channel : undefined,
     filters.requestId,
     filters.upstreamRequestId,
-    filters.ip,
+    isRoot ? filters.ip : undefined,
   ].filter(Boolean).length
   const sensitiveType = sensitiveVisible ? 'text' : 'password'
   const logTypeItems = useMemo(
@@ -331,14 +333,16 @@ export function CommonLogsFilterBar<TData>(
           onKeyDown={handleKeyDown}
         />
       </LogsFilterField>
-      <LogsFilterField>
-        <LogsFilterInput
-          placeholder={t('Filter by IP')}
-          value={filters.ip || ''}
-          onChange={(e) => handleChange('ip', e.target.value)}
-          onKeyDown={handleKeyDown}
-        />
-      </LogsFilterField>
+      {isRoot && (
+        <LogsFilterField>
+          <LogsFilterInput
+            placeholder={t('Filter by IP')}
+            value={filters.ip || ''}
+            onChange={(e) => handleChange('ip', e.target.value)}
+            onKeyDown={handleKeyDown}
+          />
+        </LogsFilterField>
+      )}
     </>
   )
 

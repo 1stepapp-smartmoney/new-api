@@ -22,11 +22,23 @@ func GetAllLogs(c *gin.Context) {
 	group := c.Query("group")
 	requestId := c.Query("request_id")
 	upstreamRequestId := c.Query("upstream_request_id")
-	ip := c.Query("ip")
+	// IP audit is root-only. Non-root admins cannot filter by IP, and the
+	// `ip` field is stripped from the response below. This prevents an admin
+	// from collecting IPs via the JSON payload or URL fuzzing.
+	isRoot := c.GetInt("role") >= common.RoleRootUser
+	ip := ""
+	if isRoot {
+		ip = c.Query("ip")
+	}
 	logs, total, err := model.GetAllLogs(logType, startTimestamp, endTimestamp, modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, group, requestId, upstreamRequestId, ip)
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	if !isRoot {
+		for i := range logs {
+			logs[i].Ip = ""
+		}
 	}
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(logs)
@@ -45,11 +57,25 @@ func GetUserLogs(c *gin.Context) {
 	group := c.Query("group")
 	requestId := c.Query("request_id")
 	upstreamRequestId := c.Query("upstream_request_id")
-	ip := c.Query("ip")
+	// Self-log endpoint: even though it only returns the caller's own rows,
+	// IP audit is reserved for the root operator. Regular and even admin
+	// users hitting /api/log/self cannot use the IP filter and cannot read
+	// the IP field from their own logs. This keeps "is the operator tracking
+	// my IP?" off the user surface entirely.
+	isRoot := c.GetInt("role") >= common.RoleRootUser
+	ip := ""
+	if isRoot {
+		ip = c.Query("ip")
+	}
 	logs, total, err := model.GetUserLogs(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), group, requestId, upstreamRequestId, ip)
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	if !isRoot {
+		for i := range logs {
+			logs[i].Ip = ""
+		}
 	}
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(logs)
@@ -89,6 +115,10 @@ func GetLogByKey(c *gin.Context) {
 			"message": err.Error(),
 		})
 		return
+	}
+	// Token-auth caller is never root-level audit; strip IP unconditionally.
+	for i := range logs {
+		logs[i].Ip = ""
 	}
 	c.JSON(200, gin.H{
 		"success": true,

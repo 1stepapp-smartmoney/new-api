@@ -98,33 +98,52 @@ official upstream solution** that solves the same problem.
   unless every user toggles the switch. The log search API and UI also had
   no `ip` filter, so even when IP was recorded, admins could not search by
   it.
-- **Local commit**: `feat(log): force-record IP + add ip filter to log search`
-  (this commit).
+- **Local commits**:
+  - `feat(log): force-record IP + add ip filter to log search`
+  - `feat(log): restrict IP visibility and filter to root role`
 - **Touched files**:
   - Backend: `common/constants.go` (new `ForceRecordIpLog` global),
     `common/init.go` (read `FORCE_RECORD_IP_LOG` env var),
     `model/log.go` (`RecordErrorLog` / `RecordConsumeLog` honour the global
     before consulting the per-user setting; `GetAllLogs` / `GetUserLogs`
     accept an `ip` arg with exact-match or wildcard `1.2.*` LIKE),
-    `controller/log.go` (`GetAllLogs` / `GetUserLogs` read `c.Query("ip")`
-    and pass it through).
-  - Default UI: `web/default/src/features/usage-logs/types.ts`
-    (`CommonLogFilters.ip`), `…/lib/filter.ts`, `…/lib/utils.ts`,
-    `…/components/common-logs-filter-bar.tsx` (new IP input field, deps,
-    expandedFilterCount), `web/default/src/routes/_authenticated/usage-logs/$section.tsx`
+    `controller/log.go` (gates `?ip=` on `role >= RoleRootUser` for both
+    `/api/log/` and `/api/log/self`; strips `Log.Ip` from the response for
+    non-root callers and unconditionally for the token-auth
+    `GetLogByKey` endpoint).
+  - Default UI: `web/default/src/hooks/use-root.ts` (new `useIsRoot`
+    hook, mirror of `useIsAdmin`),
+    `web/default/src/features/usage-logs/types.ts` (`CommonLogFilters.ip`),
+    `…/lib/filter.ts`, `…/lib/utils.ts`, `…/lib/columns.ts`
+    (column factory now takes `isRoot`),
+    `…/components/common-logs-filter-bar.tsx` (IP input wrapped in
+    `{isRoot && …}`, `expandedFilterCount` only counts `ip` for root),
+    `…/components/columns/common-logs-columns.tsx`
+    (`useCommonLogsColumns` accepts `isRoot` and threads it into the
+    details dialog), `…/components/dialogs/details-dialog.tsx`
+    (`showAdminIp` simplified to `!!log.ip && isRoot`),
+    `…/components/usage-logs-table.tsx` (call `useIsRoot()` and pass
+    through), `web/default/src/routes/_authenticated/usage-logs/$section.tsx`
     (`ip` in search-params zod schema).
   - i18n: new key `"Filter by IP"` across all 6 default-UI locale files.
 - **Behaviour**:
   - When `FORCE_RECORD_IP_LOG=true` is set in `.env`, every consume/error
     log row gets `c.ClientIP()` regardless of the user's preference. With
     `false` (default) the upstream behaviour is preserved exactly.
-  - Log search/UI gains an "IP" input. Empty / `*` means no filter; a plain
-    string is exact-match; a string containing `*` is converted to a `LIKE`
-    pattern (`192.169.*` → `WHERE ip LIKE '192.169.%'`). Both
-    `/api/log/` (admin) and `/api/log/self` (user) accept it.
-  - The `logs.ip` column already has a DB index, so filtering is fast.
+  - Viewing and filtering IPs is **root-only**. Non-root admins and
+    regular users:
+    1. don't see the "Filter by IP" input at all in the usage-logs UI,
+    2. don't see the "IP Address" row in the log details dialog,
+    3. receive log payloads with the `ip` field empty,
+    4. can't bypass via URL: `?ip=` is silently ignored, and the field
+       is stripped from the response.
+  - Root sees: input filter accepting exact (`157.15.200.38`),
+    suffix (`*.108.196`), prefix (`192.169.*`) or arbitrary wildcard
+    (`192.169.*`) — the wildcard `*` is converted to a SQL `LIKE %`.
+    The `logs.ip` column already has a DB index, so filtering is fast.
 - **Privacy note**: Forcing IP recording is a deliberate operator decision;
-  document it in your privacy policy before flipping the switch.
+  document it in your privacy policy before flipping the switch. Even with
+  recording on, only the operator (root) can read IPs through the UI/API.
 - **Upstream adoption check**:
   ```bash
   # If upstream adds an operator-level IP recording toggle or an ip filter,

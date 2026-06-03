@@ -90,6 +90,55 @@ official upstream solution** that solves the same problem.
   algorithm), drop the local `generateDistinctColors` / `expandPalette`
   helpers and adopt theirs.
 
+### 4. Force-record client IP for every request log + IP filter on log search
+
+- **Why**: Upstream gates IP recording on a per-user `record_ip_log` opt-in
+  (default off, set in the user's notification preferences). Operators who
+  need IP for audit / abuse / risk-control on every request can't get it
+  unless every user toggles the switch. The log search API and UI also had
+  no `ip` filter, so even when IP was recorded, admins could not search by
+  it.
+- **Local commit**: `feat(log): force-record IP + add ip filter to log search`
+  (this commit).
+- **Touched files**:
+  - Backend: `common/constants.go` (new `ForceRecordIpLog` global),
+    `common/init.go` (read `FORCE_RECORD_IP_LOG` env var),
+    `model/log.go` (`RecordErrorLog` / `RecordConsumeLog` honour the global
+    before consulting the per-user setting; `GetAllLogs` / `GetUserLogs`
+    accept an `ip` arg with exact-match or wildcard `1.2.*` LIKE),
+    `controller/log.go` (`GetAllLogs` / `GetUserLogs` read `c.Query("ip")`
+    and pass it through).
+  - Default UI: `web/default/src/features/usage-logs/types.ts`
+    (`CommonLogFilters.ip`), `…/lib/filter.ts`, `…/lib/utils.ts`,
+    `…/components/common-logs-filter-bar.tsx` (new IP input field, deps,
+    expandedFilterCount), `web/default/src/routes/_authenticated/usage-logs/$section.tsx`
+    (`ip` in search-params zod schema).
+  - i18n: new key `"Filter by IP"` across all 6 default-UI locale files.
+- **Behaviour**:
+  - When `FORCE_RECORD_IP_LOG=true` is set in `.env`, every consume/error
+    log row gets `c.ClientIP()` regardless of the user's preference. With
+    `false` (default) the upstream behaviour is preserved exactly.
+  - Log search/UI gains an "IP" input. Empty / `*` means no filter; a plain
+    string is exact-match; a string containing `*` is converted to a `LIKE`
+    pattern (`192.169.*` → `WHERE ip LIKE '192.169.%'`). Both
+    `/api/log/` (admin) and `/api/log/self` (user) accept it.
+  - The `logs.ip` column already has a DB index, so filtering is fast.
+- **Privacy note**: Forcing IP recording is a deliberate operator decision;
+  document it in your privacy policy before flipping the switch.
+- **Upstream adoption check**:
+  ```bash
+  # If upstream adds an operator-level IP recording toggle or an ip filter,
+  # both can be dropped.
+  git log upstream/main --oneline -- model/log.go controller/log.go \
+    common/constants.go common/init.go \
+  | grep -iE "record_ip_log|RecordIpLog|FORCE_RECORD_IP|filter.*ip|ip.*filter"
+  git grep -n '"ip"' upstream/main -- controller/log.go model/log.go
+  git grep -n "filter.*ip\\|placeholder.*[Ii][Pp]" upstream/main \
+    -- 'web/default/src/features/usage-logs/*'
+  ```
+  If upstream lands an equivalent operator toggle and an `ip` query
+  parameter, drop the local diff and switch to the upstream knob.
+
 ---
 
 ## Tooling / packaging customizations (kept regardless of upstream)

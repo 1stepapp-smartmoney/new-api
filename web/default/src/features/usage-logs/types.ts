@@ -53,6 +53,7 @@ export interface CommonLogFilters extends CommonFilters {
   username?: string
   requestId?: string
   upstreamRequestId?: string
+  ip?: string
 }
 
 /**

@@ -114,6 +114,13 @@ var MemoryCacheEnabled bool
 
 var LogConsumeEnabled = true
 
+// ForceRecordIpLog, when true, makes RecordConsumeLog / RecordErrorLog
+// always persist the client IP regardless of the per-user `record_ip_log`
+// setting. Toggled via the FORCE_RECORD_IP_LOG env var (default false to
+// keep upstream behaviour). Useful for operators who need IP for audit /
+// abuse investigation regardless of the user's per-account choice.
+var ForceRecordIpLog = false
+
 var TLSInsecureSkipVerify bool
 var InsecureTLSConfig = &tls.Config{InsecureSkipVerify: true}
 

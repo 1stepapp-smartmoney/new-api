@@ -1729,6 +1729,7 @@
     "Filter by name...": "Фильтр по имени...",
     "Filter by price field": "Фильтр по полю цены",
     "Filter by ratio type": "Фильтровать по типу коэффициента",
+    "Filter by IP": "Фильтр по IP",
     "Filter by request ID": "Фильтр по ID запроса",
     "Filter by model": "Фильтр по модели",
     "Filter by task ID": "Фильтр по ID задачи",

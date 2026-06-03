@@ -166,10 +166,12 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
 	otherStr := common.MapToJsonStr(other)
 	// 判断是否需要记录 IP
-	needRecordIp := false
-	if settingMap, err := GetUserSetting(userId, false); err == nil {
-		if settingMap.RecordIpLog {
-			needRecordIp = true
+	needRecordIp := common.ForceRecordIpLog
+	if !needRecordIp {
+		if settingMap, err := GetUserSetting(userId, false); err == nil {
+			if settingMap.RecordIpLog {
+				needRecordIp = true
+			}
 		}
 	}
 	log := &Log{
@@ -229,10 +231,12 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
 	otherStr := common.MapToJsonStr(params.Other)
 	// 判断是否需要记录 IP
-	needRecordIp := false
-	if settingMap, err := GetUserSetting(userId, false); err == nil {
-		if settingMap.RecordIpLog {
-			needRecordIp = true
+	needRecordIp := common.ForceRecordIpLog
+	if !needRecordIp {
+		if settingMap, err := GetUserSetting(userId, false); err == nil {
+			if settingMap.RecordIpLog {
+				needRecordIp = true
+			}
 		}
 	}
 	log := &Log{
@@ -315,7 +319,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 	}
 }
 
-func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
+func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string, ip string) (logs []*Log, total int64, err error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
 		tx = LOG_DB
@@ -349,6 +353,16 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 	}
 	if group != "" {
 		tx = tx.Where("logs."+logGroupCol+" = ?", group)
+	}
+	// IP supports exact match (no wildcard) or prefix wildcard "1.2.*".
+	// Empty / "*" means no filter. Index on logs.ip is used for exact and
+	// prefix queries, so admin filtering stays fast on large log tables.
+	if ip != "" && ip != "*" {
+		if strings.Contains(ip, "*") {
+			tx = tx.Where("logs.ip LIKE ?", strings.ReplaceAll(ip, "*", "%"))
+		} else {
+			tx = tx.Where("logs.ip = ?", ip)
+		}
 	}
 	err = tx.Model(&Log{}).Count(&total).Error
 	if err != nil {
@@ -404,7 +418,7 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 
 const logSearchCountLimit = 10000
 
-func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
+func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string, ip string) (logs []*Log, total int64, err error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
 		tx = LOG_DB.Where("logs.user_id = ?", userId)
@@ -432,6 +446,14 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 	}
 	if group != "" {
 		tx = tx.Where("logs."+logGroupCol+" = ?", group)
+	}
+	// Same exact / wildcard semantics as GetAllLogs.
+	if ip != "" && ip != "*" {
+		if strings.Contains(ip, "*") {
+			tx = tx.Where("logs.ip LIKE ?", strings.ReplaceAll(ip, "*", "%"))
+		} else {
+			tx = tx.Where("logs.ip = ?", ip)
+		}
 	}
 	err = tx.Model(&Log{}).Limit(logSearchCountLimit).Count(&total).Error
 	if err != nil {

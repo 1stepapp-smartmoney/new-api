@@ -1729,6 +1729,7 @@
     "Filter by name...": "Lọc theo tên...",
     "Filter by price field": "Lọc theo trường giá",
     "Filter by ratio type": "Lọc theo loại tỷ lệ",
+    "Filter by IP": "Lọc theo IP",
     "Filter by request ID": "Lọc theo ID yêu cầu",
     "Filter by model": "Lọc theo mô hình",
     "Filter by task ID": "Lọc theo ID nhiệm vụ",

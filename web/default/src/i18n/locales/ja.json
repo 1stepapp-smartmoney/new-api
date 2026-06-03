@@ -1729,6 +1729,7 @@
     "Filter by name...": "名前でフィルター...",
     "Filter by price field": "価格フィールドでフィルター",
     "Filter by ratio type": "倍率タイプで絞り込み",
+    "Filter by IP": "IPで絞り込み",
     "Filter by request ID": "リクエストIDで絞り込み",
     "Filter by model": "モデルでフィルター",
     "Filter by task ID": "タスクIDでフィルター",

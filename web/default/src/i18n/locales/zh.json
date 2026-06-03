@@ -1729,6 +1729,7 @@
     "Filter by name...": "按名称筛选...",
     "Filter by price field": "按价格字段筛选",
     "Filter by ratio type": "按倍率类型筛选",
+    "Filter by IP": "按 IP 筛选",
     "Filter by model": "按模型筛选",
     "Filter by request ID": "按请求 ID 筛选",
     "Filter by task ID": "按任务 ID 筛选",

@@ -899,17 +899,33 @@ export function DetailsDialog(props: DetailsDialogProps) {
                 />
               )}
 
-            {/* Stream status details (admin only) */}
+            {/* Stream status details (admin only).
+                Show whenever stream_status exists AND either:
+                  - the stream ended abnormally (status !== 'ok'), or
+                  - the downstream client disconnected mid-stream (client_gone).
+                Under STREAM_DRAIN_ON_CLIENT_GONE the scanner keeps reading and
+                end_reason settles to 'eof'/'done', so status='ok' alone would
+                hide the client-gone marker — we explicitly surface it. */}
             {props.isAdmin &&
               other?.stream_status &&
-              other.stream_status.status !== 'ok' && (
-                <DetailSection label={t('Stream Status')}>
+              (other.stream_status.status !== 'ok' ||
+                other.stream_status.client_gone) && (
+                <DetailSection
+                  label={t('Stream Status')}
+                  variant={
+                    other.stream_status.status !== 'ok' ? 'danger' : 'default'
+                  }
+                >
                   <DetailRow
                     label={t('Status')}
                     value={
                       <StatusBadge
                         label={other.stream_status.status || t('Error')}
-                        variant='red'
+                        variant={
+                          other.stream_status.status === 'ok'
+                            ? 'green'
+                            : 'red'
+                        }
                         size='sm'
                         copyable={false}
                       />
@@ -920,6 +936,46 @@ export function DetailsDialog(props: DetailsDialogProps) {
                       label={t('End Reason')}
                       value={other.stream_status.end_reason}
                     />
+                  )}
+                  {other.stream_status.client_gone && (
+                    <>
+                      <DetailRow
+                        label={t('Client Disconnected')}
+                        value={
+                          <StatusBadge
+                            label={t('Yes')}
+                            variant='amber'
+                            size='sm'
+                            copyable={false}
+                          />
+                        }
+                      />
+                      {other.stream_status.client_gone_at_chunks != null && (
+                        <DetailRow
+                          label={t('Disconnect at Chunks')}
+                          value={String(
+                            other.stream_status.client_gone_at_chunks
+                          )}
+                          mono
+                        />
+                      )}
+                      {other.stream_status.client_gone_at_ms != null && (
+                        <DetailRow
+                          label={t('Disconnect at')}
+                          value={formatUseTime(
+                            other.stream_status.client_gone_at_ms / 1000
+                          )}
+                          mono
+                        />
+                      )}
+                      {other.stream_status.client_gone_error && (
+                        <DetailRow
+                          label={t('Disconnect Error')}
+                          value={other.stream_status.client_gone_error}
+                          mono
+                        />
+                      )}
+                    </>
                   )}
                   {(other.stream_status.error_count ?? 0) > 0 && (
                     <DetailRow
@@ -939,6 +995,37 @@ export function DetailsDialog(props: DetailsDialogProps) {
                         {other.stream_status.errors.join('\n')}
                       </pre>
                     )}
+                </DetailSection>
+              )}
+
+            {/* Non-stream client disconnect (admin only). Stream requests use
+                stream_status above; this surfaces the same signal for non-stream
+                requests where the downstream client TCP-closed before we
+                finished talking to upstream. */}
+            {props.isAdmin &&
+              !props.log.is_stream &&
+              other?.client_disconnected && (
+                <DetailSection label={t('Client Disconnect')}>
+                  <DetailRow
+                    label={t('Client Disconnected')}
+                    value={
+                      <StatusBadge
+                        label={t('Yes')}
+                        variant='amber'
+                        size='sm'
+                        copyable={false}
+                      />
+                    }
+                  />
+                  {other.client_disconnected_at_ms != null && (
+                    <DetailRow
+                      label={t('Disconnect at')}
+                      value={formatUseTime(
+                        other.client_disconnected_at_ms / 1000
+                      )}
+                      mono
+                    />
+                  )}
                 </DetailSection>
               )}
 

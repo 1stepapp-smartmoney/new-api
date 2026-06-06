@@ -176,7 +176,18 @@ export interface LogOtherData {
     error_count?: number
     end_error?: string
     errors?: string[]
+    // Downstream client disconnected mid-stream. When STREAM_DRAIN_ON_CLIENT_GONE
+    // is enabled the scanner keeps reading after this point, so end_reason may
+    // settle to 'eof'/'done' even though client_gone is true.
+    client_gone?: boolean
+    client_gone_at_chunks?: number
+    client_gone_at_ms?: number
+    client_gone_error?: string
   }
+  // Top-level disconnect signal populated for non-stream requests (where
+  // stream_status is absent). For streaming, prefer stream_status.client_gone.
+  client_disconnected?: boolean
+  client_disconnected_at_ms?: number
   // Violation fee fields
   violation_fee?: boolean
   violation_fee_code?: string

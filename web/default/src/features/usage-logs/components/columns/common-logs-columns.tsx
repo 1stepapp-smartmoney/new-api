@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useState } from 'react'
 import { type ColumnDef } from '@tanstack/react-table'
-import { CircleAlert, Sparkles, KeyRound } from 'lucide-react'
+import { CircleAlert, Sparkles, KeyRound, Unplug } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { getUserAvatarFallback, getUserAvatarStyle } from '@/lib/avatar'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
@@ -693,6 +693,54 @@ export function useCommonLogsColumns(
                     </Tooltip>
                   </TooltipProvider>
                 )}
+              {/* Client-disconnect indicator. Independent of stream_status.status
+                  because under STREAM_DRAIN_ON_CLIENT_GONE the stream still
+                  ends with status='ok' / end_reason='eof', but the client
+                  abandoned mid-flight — operators need to see that.
+                  Covers both streaming (stream_status.client_gone) and
+                  non-streaming (top-level client_disconnected). */}
+              {(other?.stream_status?.client_gone ||
+                other?.client_disconnected) && (
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={<Unplug className='size-3 text-amber-500' />}
+                    ></TooltipTrigger>
+                    <TooltipContent>
+                      <div className='space-y-0.5 text-xs'>
+                        <p className='font-medium'>
+                          {t('Client Disconnected')}
+                        </p>
+                        {other?.stream_status?.client_gone_at_chunks != null && (
+                          <p>
+                            {t('Disconnect at Chunks')}:{' '}
+                            {other.stream_status.client_gone_at_chunks}
+                          </p>
+                        )}
+                        {other?.stream_status?.client_gone_at_ms != null && (
+                          <p>
+                            {t('Disconnect at')}:{' '}
+                            {(
+                              other.stream_status.client_gone_at_ms / 1000
+                            ).toFixed(2)}
+                            s
+                          </p>
+                        )}
+                        {!log.is_stream &&
+                          other?.client_disconnected_at_ms != null && (
+                            <p>
+                              {t('Disconnect at')}:{' '}
+                              {(other.client_disconnected_at_ms / 1000).toFixed(
+                                2
+                              )}
+                              s
+                            </p>
+                          )}
+                      </div>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              )}
             </div>
           </div>
         )

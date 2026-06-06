@@ -233,10 +233,11 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 				// at the natural end; MarkClientGone records the truncation
 				// point separately.
 				if common.StreamDrainOnClientGone {
-					info.StreamStatus.MarkClientGone(info.ReceivedResponseCount, c.Request.Context().Err())
+					info.StreamStatus.MarkClientGone(info.ReceivedResponseCount, elapsedMs(info), c.Request.Context().Err())
 					clientGoneCh = nil
 					break // exit select, continue scanner loop
 				}
+				info.StreamStatus.MarkClientGone(info.ReceivedResponseCount, elapsedMs(info), c.Request.Context().Err())
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, c.Request.Context().Err())
 				return
 			default:
@@ -299,10 +300,11 @@ waitLoop:
 			break waitLoop
 		case <-mainClientGoneCh:
 			if common.StreamDrainOnClientGone {
-				info.StreamStatus.MarkClientGone(info.ReceivedResponseCount, c.Request.Context().Err())
+				info.StreamStatus.MarkClientGone(info.ReceivedResponseCount, elapsedMs(info), c.Request.Context().Err())
 				mainClientGoneCh = nil // never fires again, drain continues
 				continue
 			}
+			info.StreamStatus.MarkClientGone(info.ReceivedResponseCount, elapsedMs(info), c.Request.Context().Err())
 			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, c.Request.Context().Err())
 			break waitLoop
 		}
@@ -313,4 +315,13 @@ waitLoop:
 	} else {
 		logger.LogError(c, fmt.Sprintf("stream ended: %s, received=%d", info.StreamStatus.Summary(), info.ReceivedResponseCount))
 	}
+}
+
+// elapsedMs returns the milliseconds elapsed since info.StartTime, or 0 if
+// StartTime is the zero value (defensive fallback).
+func elapsedMs(info *relaycommon.RelayInfo) int64 {
+	if info == nil || info.StartTime.IsZero() {
+		return 0
+	}
+	return time.Since(info.StartTime).Milliseconds()
 }

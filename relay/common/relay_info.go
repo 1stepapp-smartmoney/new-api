@@ -96,6 +96,16 @@ type RelayInfo struct {
 	StartTime         time.Time
 	FirstResponseTime time.Time
 	isFirstResponse   bool
+	// ClientDisconnected is set true when the downstream client TCP-closed
+	// the connection before the upstream's response was fully delivered to
+	// it. Captured at the moment we observe `c.Request.Context().Err() != nil`,
+	// regardless of stream / non-stream path. Surfaces as
+	// `other.client_disconnected_at_ms` in the log row so that operators
+	// reconciling provider invoices know the difference between "user got
+	// the full response" and "user paid for the full response but only
+	// received the first N seconds before giving up".
+	ClientDisconnected     bool
+	ClientDisconnectedAtMs int64
 	//SendLastReasoningResponse bool
 	IsStream               bool
 	IsGeminiBatchEmbedding bool

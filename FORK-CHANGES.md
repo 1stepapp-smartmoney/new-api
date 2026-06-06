@@ -336,6 +336,59 @@ official upstream solution** that solves the same problem.
     upstream/main
   ```
 
+### 9. Annotate logs with client disconnect timing (stream + non-stream)
+
+- **Why**: Once §8 makes us drain upstream after client_gone, the log
+  needs to tell support staff WHEN the client gave up — otherwise an
+  invoice reconciliation can confirm "billed for 1558s of compute"
+  but not "client got 12s before bailing". The same annotation is
+  also needed for non-streaming requests: upstream's `http.NewRequest`
+  uses `context.Background()` so `client.Do` doesn't know the client
+  is gone, billing proceeds normally — but the log row also gave no
+  hint that the client wasn't around to read the answer.
+- **Local commit**: `feat(log): record client-disconnect timing in
+  stream and non-stream paths`.
+- **Touched files**:
+  - `relay/common/stream_status.go`: `MarkClientGone` now also takes
+    an `atMs int64` arg and stores it in `ClientGoneAtMs`.
+  - `relay/helper/stream_scanner.go`: small `elapsedMs(info)` helper
+    derives the value from `info.StartTime`; passed at both
+    MarkClientGone call sites (drain and non-drain).
+  - `relay/common/relay_info.go`: new top-level `ClientDisconnected`
+    + `ClientDisconnectedAtMs` fields on RelayInfo. Independent of
+    stream/non-stream.
+  - `relay/compatible_handler.go`: after `adaptor.DoResponse` returns
+    (i.e. when the upstream is fully consumed), check
+    `c.Request.Context().Err() != nil` and populate the RelayInfo
+    fields. Works for both streaming and non-streaming code paths.
+  - `service/log_info_generate.go`: new `appendClientDisconnectStatus`
+    emits `other.client_disconnected = true` and
+    `other.client_disconnected_at_ms = N` unconditionally when the
+    flag is set. Streaming requests additionally get
+    `stream_status.client_gone_at_ms` (the stream-scoped version),
+    which is slightly redundant but lets a single log row be read
+    self-sufficiently regardless of which code path produced it.
+- **Effect on log row**:
+  - **Non-stream** + client disappeared mid-wait: `other` gains
+    `client_disconnected: true, client_disconnected_at_ms: 8420`.
+    Billing fields reflect the full upstream response.
+  - **Stream** (drain mode) + client_gone: `stream_status` carries
+    `{end_reason: "eof", client_gone: true, client_gone_at_chunks: 142,
+    client_gone_at_ms: 12480}`, AND `other` gets the top-level
+    `client_disconnected*` mirror. Combined with the row's existing
+    `use_time` (= total stream seconds) and `other.frt` (= first-byte
+    ms), an operator can read off: total upstream time, time to first
+    byte, when the client gave up, how many chunks the client
+    received — entire reconciliation story in one row.
+- **Upstream adoption check**:
+  ```bash
+  git grep -n "ClientDisconnected\|client_disconnected_at_ms\|ClientGoneAtMs" \
+    upstream/main
+  git log upstream/main --oneline -- relay/compatible_handler.go \
+    relay/common/relay_info.go service/log_info_generate.go \
+  | grep -iE "client.disconnect|client.gone|drain|abort"
+  ```
+
 #### ⚠ Operational trap — DO NOT delete `idx_logs_username`
 
 The `Log` struct in `model/log.go` declares `Username string

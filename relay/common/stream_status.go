@@ -45,7 +45,12 @@ type StreamStatus struct {
 	clientGoneOnce     sync.Once
 	ClientGoneDetected bool
 	ClientGoneAtChunks int
-	ClientGoneError    error
+	// ClientGoneAtMs is the elapsed milliseconds between the request start
+	// (info.StartTime) and the moment the downstream client disconnected.
+	// Useful for reconciling "client gave up after N seconds but upstream
+	// kept going for another M seconds" scenarios.
+	ClientGoneAtMs  int64
+	ClientGoneError error
 
 	mu         sync.Mutex
 	Errors     []StreamErrorEntry
@@ -69,16 +74,18 @@ func (s *StreamStatus) SetEndReason(reason StreamEndReason, err error) {
 // MarkClientGone idempotently flags that the downstream client disconnected
 // mid-stream. atChunks should be info.ReceivedResponseCount at the moment of
 // detection — it captures how much the client actually received before going
-// away. This is independent of EndReason: in drain mode the scanner keeps
-// going, so EndReason can still settle to "eof"/"done" even though the
-// client gave up earlier.
-func (s *StreamStatus) MarkClientGone(atChunks int, err error) {
+// away. atMs is the elapsed milliseconds since the request started (pass 0
+// if unknown). This is independent of EndReason: in drain mode the scanner
+// keeps going, so EndReason can still settle to "eof"/"done" even though
+// the client gave up earlier.
+func (s *StreamStatus) MarkClientGone(atChunks int, atMs int64, err error) {
 	if s == nil {
 		return
 	}
 	s.clientGoneOnce.Do(func() {
 		s.ClientGoneDetected = true
 		s.ClientGoneAtChunks = atChunks
+		s.ClientGoneAtMs = atMs
 		s.ClientGoneError = err
 	})
 }

@@ -79,7 +79,26 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	appendBillingInfo(relayInfo, other)
 	appendParamOverrideInfo(relayInfo, other)
 	appendStreamStatus(relayInfo, other)
+	appendClientDisconnectStatus(relayInfo, other)
 	return other
+}
+
+// appendClientDisconnectStatus surfaces the downstream-client disconnect
+// event uniformly for BOTH stream and non-stream paths. For streaming
+// requests this is somewhat redundant with stream_status.client_gone but
+// keeps the top-level key set consistent for non-stream reconciliation
+// (where stream_status is not emitted at all).
+func appendClientDisconnectStatus(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+	if relayInfo == nil || other == nil {
+		return
+	}
+	if !relayInfo.ClientDisconnected {
+		return
+	}
+	other["client_disconnected"] = true
+	if relayInfo.ClientDisconnectedAtMs > 0 {
+		other["client_disconnected_at_ms"] = relayInfo.ClientDisconnectedAtMs
+	}
 }
 
 func appendParamOverrideInfo(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
@@ -121,6 +140,9 @@ func appendStreamStatus(relayInfo *relaycommon.RelayInfo, other map[string]inter
 	if ss.ClientGoneDetected {
 		streamInfo["client_gone"] = true
 		streamInfo["client_gone_at_chunks"] = ss.ClientGoneAtChunks
+		if ss.ClientGoneAtMs > 0 {
+			streamInfo["client_gone_at_ms"] = ss.ClientGoneAtMs
+		}
 		if ss.ClientGoneError != nil {
 			streamInfo["client_gone_error"] = ss.ClientGoneError.Error()
 		}

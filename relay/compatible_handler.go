@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -209,6 +210,20 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		// reset status code 重置状态码
 		service.ResetStatusCode(newApiErr, statusCodeMappingStr)
 		return newApiErr
+	}
+
+	// If the downstream client TCP-disconnected while we were still talking
+	// to the upstream, annotate the log row so operators can tell apart
+	// "client received the full response" from "client gave up early but
+	// we still got billed for the full upstream output". For streaming
+	// requests, StreamStatus already carries client_gone — but we also
+	// populate the RelayInfo fields here as a uniform fallback for
+	// non-streaming requests (where StreamStatus is nil).
+	if !info.ClientDisconnected && c.Request.Context().Err() != nil {
+		info.ClientDisconnected = true
+		if !info.StartTime.IsZero() {
+			info.ClientDisconnectedAtMs = time.Since(info.StartTime).Milliseconds()
+		}
 	}
 
 	var containAudioTokens = usage.(*dto.Usage).CompletionTokenDetails.AudioTokens > 0 || usage.(*dto.Usage).PromptTokensDetails.AudioTokens > 0

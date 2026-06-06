@@ -319,12 +319,15 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 	}
 }
 
-func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string, ip string) (logs []*Log, total int64, err error) {
+func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string, ip string, isStream string) (logs []*Log, total int64, err error) {
 	// Force the (username, created_at, type) composite index on MySQL when an
 	// admin searches by username. See logsTableExprForUsername for rationale.
 	tx := LOG_DB.Table(logsTableExprForUsername(username))
 	if logType != LogTypeUnknown {
 		tx = tx.Where("logs.type = ?", logType)
+	}
+	if streamFlag, ok := parseIsStreamFilter(isStream); ok {
+		tx = tx.Where("logs.is_stream = ?", streamFlag)
 	}
 
 	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", modelName); err != nil {
@@ -418,12 +421,15 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 
 const logSearchCountLimit = 10000
 
-func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string, ip string) (logs []*Log, total int64, err error) {
+func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string, ip string, isStream string) (logs []*Log, total int64, err error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
 		tx = LOG_DB.Where("logs.user_id = ?", userId)
 	} else {
 		tx = LOG_DB.Where("logs.user_id = ? and logs.type = ?", userId, logType)
+	}
+	if streamFlag, ok := parseIsStreamFilter(isStream); ok {
+		tx = tx.Where("logs.is_stream = ?", streamFlag)
 	}
 
 	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", modelName); err != nil {
@@ -474,6 +480,30 @@ type Stat struct {
 	Quota int `json:"quota"`
 	Rpm   int `json:"rpm"`
 	Tpm   int `json:"tpm"`
+}
+
+// parseIsStreamFilter interprets the API-level `is_stream` query value as a
+// boolean filter. The second return is false when the caller wants ALL rows
+// (no filter); true means the bool in the first return should be applied as
+// `WHERE is_stream = ?`. Accepts a liberal set of inputs so both the
+// frontend dropdown and ad-hoc curl calls work:
+//
+//   ""           → no filter
+//   "all" / "any" / "*" → no filter
+//   "1" / "true"  / "stream"     / "yes" → is_stream = true
+//   "0" / "false" / "non_stream" / "no"  → is_stream = false
+//
+// Any other value is treated as "no filter" rather than rejected, to keep
+// log-list calls resilient to bad client input.
+func parseIsStreamFilter(value string) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "stream", "yes":
+		return true, true
+	case "0", "false", "non_stream", "non-stream", "nonstream", "no":
+		return false, true
+	default:
+		return false, false
+	}
 }
 
 // logsTableExprForUsername returns the FROM-clause expression for queries

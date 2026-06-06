@@ -54,6 +54,13 @@ export interface CommonLogFilters extends CommonFilters {
   requestId?: string
   upstreamRequestId?: string
   ip?: string
+  /**
+   * Stream mode filter.
+   *   ""              → all (no filter)
+   *   "stream"        → is_stream = 1
+   *   "non_stream"    → is_stream = 0
+   */
+  isStream?: string
 }
 
 /**

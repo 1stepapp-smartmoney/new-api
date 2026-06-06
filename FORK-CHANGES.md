@@ -208,6 +208,62 @@ official upstream solution** that solves the same problem.
   If upstream switches to a materialized aggregate or a different
   schema-level fix that obviates the hint, drop the local helper.
 
+### 6. Multi-header fallback for `upstream_request_id`
+
+- **Why**: Upstream's relay layer only reads `X-Oneapi-Request-Id` from
+  the upstream response when populating the `upstream_request_id` log
+  column. That header is set only when the upstream is itself another
+  new-api instance. Real providers (Anthropic, OpenAI, Azure) and edge
+  proxies (Cloudflare) use different header names, so the column stayed
+  empty for >99% of production traffic, making post-hoc reconciliation
+  with upstream invoices impossible.
+- **Local commit**: `fix(log): try multiple upstream trace headers when
+  populating upstream_request_id`.
+- **Touched files**: `relay/channel/api_request.go` only.
+- **Behaviour**: After the upstream response arrives, try
+  `X-Oneapi-Request-Id`, `X-Request-Id`, `Request-Id`, `Cf-Ray`,
+  `Apim-Request-Id` in order; first non-empty value wins. No DB schema
+  change required — `upstream_request_id` is already `VARCHAR(128)` with
+  an index, easily fits all known trace-id formats (longest UUID is
+  ~36 chars).
+- **Upstream adoption check**:
+  ```bash
+  git grep -n "Cf-Ray\|X-Request-Id\|Request-Id\|Apim-Request-Id" \
+    upstream/main -- relay/channel/api_request.go
+  ```
+  If upstream picks up the same fallback chain (or implements an
+  equivalent), drop the local diff.
+
+### 7. `is_stream` query filter on log search APIs
+
+- **Why**: Operators frequently need to scope log queries to streaming
+  or non-streaming requests separately when triaging timeout/abort
+  patterns (streaming has different lifecycle and failure modes). The
+  underlying column already exists; only the query/filter plumbing
+  was missing.
+- **Local commit**: same as §6 — single commit `feat(log): add
+  is_stream filter ...`.
+- **Touched files**:
+  - Backend: `model/log.go` adds `parseIsStreamFilter()` helper and
+    threads an `isStream` arg into `GetAllLogs` / `GetUserLogs`.
+    `controller/log.go` reads `?is_stream=` from the query string.
+    Accepted values: `""`/`"all"` (no filter), `"stream"`/`"1"`,
+    `"non_stream"`/`"0"`.
+  - Default UI: `web/default/src/features/usage-logs/types.ts` adds
+    `isStream` to `CommonLogFilters`; `lib/filter.ts` and `lib/utils.ts`
+    propagate the value; `routes/.../$section.tsx` widens the search
+    schema; `components/common-logs-filter-bar.tsx` renders a new
+    Select (`All Modes` / `Stream Only` / `Non-Stream Only`) next to
+    the existing IP input.
+  - i18n: 3 new keys (`All Modes`, `Stream Only`, `Non-Stream Only`)
+    in all 6 default-UI locale files.
+- **Upstream adoption check**:
+  ```bash
+  git grep -n "is_stream" upstream/main -- model/log.go controller/log.go
+  git grep -n "isStream" upstream/main -- \
+    'web/default/src/features/usage-logs/*'
+  ```
+
 #### ⚠ Operational trap — DO NOT delete `idx_logs_username`
 
 The `Log` struct in `model/log.go` declares `Username string

@@ -97,6 +97,7 @@ export function CommonLogsFilterBar<TData>(
       requestId: searchParams.requestId || undefined,
       upstreamRequestId: searchParams.upstreamRequestId || undefined,
       ip: searchParams.ip || undefined,
+      isStream: searchParams.isStream || undefined,
     })
 
     const typeArr = searchParams.type
@@ -118,6 +119,7 @@ export function CommonLogsFilterBar<TData>(
     searchParams.requestId,
     searchParams.upstreamRequestId,
     searchParams.ip,
+    searchParams.isStream,
     searchParams.type,
   ])
 
@@ -176,7 +178,8 @@ export function CommonLogsFilterBar<TData>(
     !!filters.channel ||
     !!filters.requestId ||
     !!filters.upstreamRequestId ||
-    (isRoot && !!filters.ip)
+    (isRoot && !!filters.ip) ||
+    !!filters.isStream
 
   const hasTypeFilter = logType !== LOG_TYPE_ALL_VALUE
   const hasAdditionalFilters =
@@ -189,6 +192,7 @@ export function CommonLogsFilterBar<TData>(
     filters.requestId,
     filters.upstreamRequestId,
     isRoot ? filters.ip : undefined,
+    filters.isStream,
   ].filter(Boolean).length
   const sensitiveType = sensitiveVisible ? 'text' : 'password'
   const logTypeItems = useMemo(
@@ -343,6 +347,32 @@ export function CommonLogsFilterBar<TData>(
           />
         </LogsFilterField>
       )}
+      <LogsFilterField>
+        <Select
+          items={[
+            { value: '__all__', label: t('All Modes') },
+            { value: 'stream', label: t('Stream Only') },
+            { value: 'non_stream', label: t('Non-Stream Only') },
+          ]}
+          value={filters.isStream && filters.isStream !== '' ? filters.isStream : '__all__'}
+          onValueChange={(v) =>
+            handleChange('isStream', v === '__all__' ? '' : v)
+          }
+        >
+          <SelectTrigger>
+            <SelectValue placeholder={t('Stream Mode')} />
+          </SelectTrigger>
+          <SelectContent alignItemWithTrigger={false}>
+            <SelectGroup>
+              <SelectItem value='__all__'>{t('All Modes')}</SelectItem>
+              <SelectItem value='stream'>{t('Stream Only')}</SelectItem>
+              <SelectItem value='non_stream'>
+                {t('Non-Stream Only')}
+              </SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </LogsFilterField>
     </>
   )
 

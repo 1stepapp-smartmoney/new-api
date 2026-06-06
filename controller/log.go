@@ -30,7 +30,8 @@ func GetAllLogs(c *gin.Context) {
 	if isRoot {
 		ip = c.Query("ip")
 	}
-	logs, total, err := model.GetAllLogs(logType, startTimestamp, endTimestamp, modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, group, requestId, upstreamRequestId, ip)
+	isStream := c.Query("is_stream")
+	logs, total, err := model.GetAllLogs(logType, startTimestamp, endTimestamp, modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, group, requestId, upstreamRequestId, ip, isStream)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -67,7 +68,8 @@ func GetUserLogs(c *gin.Context) {
 	if isRoot {
 		ip = c.Query("ip")
 	}
-	logs, total, err := model.GetUserLogs(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), group, requestId, upstreamRequestId, ip)
+	isStream := c.Query("is_stream")
+	logs, total, err := model.GetUserLogs(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), group, requestId, upstreamRequestId, ip, isStream)
 	if err != nil {
 		common.ApiError(c, err)
 		return

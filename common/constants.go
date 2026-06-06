@@ -121,6 +121,22 @@ var LogConsumeEnabled = true
 // abuse investigation regardless of the user's per-account choice.
 var ForceRecordIpLog = false
 
+// StreamDrainOnClientGone, when true, makes the stream scanner KEEP READING
+// from the upstream provider after a downstream client disconnects (instead
+// of immediately closing the upstream connection). This makes our billing
+// match the upstream's billing: providers like Anthropic / OpenAI keep
+// running the inference and bill for the full output regardless of whether
+// the downstream socket is still attached. Without draining, our DB records
+// only the partial tokens delivered before client_gone, and the operator
+// silently eats the difference.
+//
+// When this flag is true, the log row will end up with EndReason == "eof"
+// (or "done") AND `client_gone = true` in stream_status, recording the
+// client-gone event without distorting the EndReason field. Toggled via
+// STREAM_DRAIN_ON_CLIENT_GONE env var, default false to preserve upstream
+// behaviour and so existing deployments don't change behaviour on upgrade.
+var StreamDrainOnClientGone = false
+
 var TLSInsecureSkipVerify bool
 var InsecureTLSConfig = &tls.Config{InsecureSkipVerify: true}
 

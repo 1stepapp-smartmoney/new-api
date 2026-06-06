@@ -113,6 +113,18 @@ func appendStreamStatus(relayInfo *relaycommon.RelayInfo, other map[string]inter
 		}
 		streamInfo["errors"] = messages
 	}
+	// Record downstream-client disconnection separately from EndReason.
+	// In drain mode (STREAM_DRAIN_ON_CLIENT_GONE=true), EndReason settles
+	// to eof/done because the scanner kept reading to capture full upstream
+	// usage for billing; client_gone here surfaces the truncation point
+	// for support / reconciliation purposes.
+	if ss.ClientGoneDetected {
+		streamInfo["client_gone"] = true
+		streamInfo["client_gone_at_chunks"] = ss.ClientGoneAtChunks
+		if ss.ClientGoneError != nil {
+			streamInfo["client_gone_error"] = ss.ClientGoneError.Error()
+		}
+	}
 	other["stream_status"] = streamInfo
 }
 

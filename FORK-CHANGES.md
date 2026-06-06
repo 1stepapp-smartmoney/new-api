@@ -264,6 +264,78 @@ official upstream solution** that solves the same problem.
     'web/default/src/features/usage-logs/*'
   ```
 
+### 8. Drain upstream on client_gone so billing matches the provider
+
+- **Why**: When a downstream client disconnects mid-stream, upstream's
+  scanner immediately returns and the `defer resp.Body.Close()` kills
+  the upstream TCP connection. Providers (Anthropic, OpenAI, Azure) do
+  NOT stop their LLM inference when a downstream TCP socket goes away
+  — the GPU job keeps running until completion and the operator is
+  billed for the FULL output. Meanwhile new-api only records the
+  partial tokens the client received before disconnecting, so the
+  fork's DB-side billing is systematically less than the upstream
+  invoice. On busy traffic this is a real, ongoing P&L leak —
+  observed ~2750 client_gone-with-ct=0 rows in a single day on this
+  deployment, each leaking the full output's worth of tokens.
+- **Local commit**: `feat(stream): drain upstream after client_gone to
+  match provider billing`.
+- **Touched files**:
+  - `common/constants.go` (new `StreamDrainOnClientGone` flag) +
+    `common/init.go` (read `STREAM_DRAIN_ON_CLIENT_GONE` env var,
+    default false so behaviour only changes when operator opts in).
+  - `relay/common/stream_status.go`: new `ClientGoneDetected`,
+    `ClientGoneAtChunks`, `ClientGoneError` fields + idempotent
+    `MarkClientGone(atChunks, err)` helper. Independent of EndReason.
+  - `relay/helper/stream_scanner.go`: in both the scanner loop and the
+    main waiting select, when drain is on, observe client_gone once
+    via a one-shot `clientGoneCh` (nil'd after first observation so
+    the always-signaled `Context.Done()` channel does not starve the
+    other cases), record it, and KEEP READING. The scanner naturally
+    exits on the real upstream EOF / `[DONE]` / streaming timeout, so
+    `info.Usage` ends up populated from the full upstream stream.
+    `dataHandler` writes to a dead client socket silently fail (Go's
+    http server tolerates `EPIPE`), and the verified providers
+    (Claude / OpenAI) only call `sr.Stop()` on PARSE errors, not on
+    write errors — so the drain is safe across the standard adapters.
+  - `service/log_info_generate.go`: emit
+    `stream_status.client_gone = true` and
+    `stream_status.client_gone_at_chunks = N` whenever
+    `ClientGoneDetected` is set, independent of EndReason. So a typical
+    log row in drain mode looks like:
+    ```json
+    "stream_status": {
+      "status": "ok",
+      "end_reason": "eof",
+      "client_gone": true,
+      "client_gone_at_chunks": 142
+    }
+    ```
+    while billing reflects the full upstream output.
+- **Operational caveats**:
+  - Default is OFF (`STREAM_DRAIN_ON_CLIENT_GONE=false`). Operators
+    must opt in explicitly because draining ties up the goroutine
+    and upstream conn for the full inference duration even after the
+    client is gone — that costs concurrency. Worthwhile only if the
+    provider really bills for the full output (Anthropic, OpenAI,
+    Bedrock all do).
+  - Streaming timeout (`STREAMING_TIMEOUT`, default 300s) still
+    applies — if the upstream itself hangs after client_gone, the
+    drain is cut off and `EndReason=timeout` takes over.
+  - User charged amount is now consistent with upstream invoice, so
+    the user-visible spend on a "I cancelled after 2 seconds" request
+    may look surprisingly high. Document this behaviour to end users
+    (see the customer-facing explanation drafted alongside this
+    change in chat notes).
+- **Upstream adoption check**:
+  ```bash
+  # If upstream ever ships native drain support, drop this fork patch.
+  git log upstream/main --oneline -- relay/helper/stream_scanner.go \
+    relay/common/stream_status.go \
+  | grep -iE "drain|client.gone|continue.*read|bill.*match"
+  git grep -n "MarkClientGone\|StreamDrainOnClientGone\|ClientGoneDetected" \
+    upstream/main
+  ```
+
 #### ⚠ Operational trap — DO NOT delete `idx_logs_username`
 
 The `Log` struct in `model/log.go` declares `Username string

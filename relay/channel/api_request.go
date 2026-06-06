@@ -523,8 +523,24 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		return nil, errors.New("resp is nil")
 	}
 
-	if upID := resp.Header.Get(common2.RequestIdKey); upID != "" {
-		c.Set(common2.UpstreamRequestIdKey, upID)
+	// Try several common upstream trace-id headers in priority order.
+	// Upstream's original code only checked X-Oneapi-Request-Id, which is
+	// returned only when the upstream is itself another new-api instance.
+	// Real providers (Anthropic, OpenAI, Azure) and edge proxies (Cloudflare)
+	// use different header names — without this fallback the
+	// `upstream_request_id` column stays empty for the vast majority of
+	// production traffic, making post-hoc reconciliation impossible.
+	for _, k := range []string{
+		common2.RequestIdKey, // X-Oneapi-Request-Id — another new-api instance upstream
+		"X-Request-Id",       // OpenAI / Azure OpenAI / many compatible APIs
+		"Request-Id",         // Anthropic Messages API
+		"Cf-Ray",             // Cloudflare edge (a072a5555e6f1be3-LAX style)
+		"Apim-Request-Id",    // Azure API Management front
+	} {
+		if upID := resp.Header.Get(k); upID != "" {
+			c.Set(common2.UpstreamRequestIdKey, upID)
+			break
+		}
 	}
 
 	_ = req.Body.Close()

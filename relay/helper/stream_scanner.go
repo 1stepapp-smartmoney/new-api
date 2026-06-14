@@ -213,11 +213,6 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			logger.LogDebug(c, "scanner goroutine exited")
 		}()
 
-		// clientGoneCh fires once when the downstream client disconnects.
-		// In drain mode we nil this channel after first observation so the
-		// select can keep picking the `default` branch and the scanner keeps
-		// reading. (A nil channel never fires.)
-		clientGoneCh := c.Request.Context().Done()
 		for scanner.Scan() {
 			// 检查是否需要停止
 			select {
@@ -225,18 +220,13 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 				return
 			case <-ctx.Done():
 				return
-			case <-clientGoneCh:
-				// When drain mode is on, we DON'T return on client-gone:
-				// upstream is still generating tokens and will bill us for
-				// the full output, so we need to keep reading to capture
-				// the complete usage chunk. EndReason settles to eof/done
-				// at the natural end; MarkClientGone records the truncation
-				// point separately.
-				if common.StreamDrainOnClientGone {
-					info.StreamStatus.MarkClientGone(info.ReceivedResponseCount, elapsedMs(info), c.Request.Context().Err())
-					clientGoneCh = nil
-					break // exit select, continue scanner loop
-				}
+			case <-c.Request.Context().Done():
+				// Downstream client disconnected: record the truncation point
+				// (chunks delivered + elapsed) and stop reading immediately.
+				// Closing the response body via the outer defer cuts off
+				// upstream generation, which matches how providers like
+				// Anthropic / OpenAI / Bedrock bill — they stop charging once
+				// our HTTP connection closes.
 				info.StreamStatus.MarkClientGone(info.ReceivedResponseCount, elapsedMs(info), c.Request.Context().Err())
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, c.Request.Context().Err())
 				return
@@ -285,10 +275,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonEOF, nil)
 	})
 
-	// 主循环等待完成或超时。drain 模式下，客户端断开不再触发立刻退出，
-	// 而是 MarkClientGone 后继续等待 scanner 因自然 EOF/Done/timeout 触发
-	// stopChan。这样 token 计费能反映上游的完整输出。
-	mainClientGoneCh := c.Request.Context().Done()
+	// 主循环：等待 scanner 自然结束 / 超时 / 客户端断开。
 waitLoop:
 	for {
 		select {
@@ -298,12 +285,7 @@ waitLoop:
 		case <-stopChan:
 			// EndReason already set by the goroutine that triggered stopChan
 			break waitLoop
-		case <-mainClientGoneCh:
-			if common.StreamDrainOnClientGone {
-				info.StreamStatus.MarkClientGone(info.ReceivedResponseCount, elapsedMs(info), c.Request.Context().Err())
-				mainClientGoneCh = nil // never fires again, drain continues
-				continue
-			}
+		case <-c.Request.Context().Done():
 			info.StreamStatus.MarkClientGone(info.ReceivedResponseCount, elapsedMs(info), c.Request.Context().Err())
 			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, c.Request.Context().Err())
 			break waitLoop

@@ -34,14 +34,9 @@ type StreamStatus struct {
 	endOnce   sync.Once
 
 	// ClientGoneDetected records that the downstream client disconnected
-	// during the stream. When the fork's STREAM_DRAIN_ON_CLIENT_GONE flag
-	// is on, the scanner keeps reading from upstream after this fires so
-	// that token accounting reflects the full upstream output (matching how
-	// providers like Anthropic / OpenAI bill). In that case EndReason will
-	// still settle to EOF/Done, but ClientGoneDetected stays true and
-	// ClientGoneAtChunks records how many SSE chunks the client received
-	// before disconnecting — useful when reconciling complaints like "I
-	// only got 200 tokens but was billed for 10000".
+	// during the stream. EndReason is set to ClientGone at the same time;
+	// these two fields together let support tell apart "client got the
+	// full response" from "client gave up early after N chunks / M ms".
 	clientGoneOnce     sync.Once
 	ClientGoneDetected bool
 	ClientGoneAtChunks int
@@ -75,9 +70,9 @@ func (s *StreamStatus) SetEndReason(reason StreamEndReason, err error) {
 // mid-stream. atChunks should be info.ReceivedResponseCount at the moment of
 // detection — it captures how much the client actually received before going
 // away. atMs is the elapsed milliseconds since the request started (pass 0
-// if unknown). This is independent of EndReason: in drain mode the scanner
-// keeps going, so EndReason can still settle to "eof"/"done" even though
-// the client gave up earlier.
+// if unknown). Callers typically pair this with SetEndReason(ClientGone) so
+// the two fields together let support reconcile "client got N chunks over
+// M ms before disconnecting".
 func (s *StreamStatus) MarkClientGone(atChunks int, atMs int64, err error) {
 	if s == nil {
 		return

@@ -264,148 +264,7 @@ official upstream solution** that solves the same problem.
     'web/default/src/features/usage-logs/*'
   ```
 
-### 8. Drain upstream on client_gone so billing matches the provider — ⛔ DEPRECATED / RETRACTED
-
-> **Status (2026-06-06)**: The premise behind this change was **wrong**.
-> Verified with Anthropic, then cross-checked against OpenAI and AWS
-> Bedrock: **all major providers stop billing when the downstream HTTP
-> connection closes**. The new-api original logic (close upstream the
-> moment the client disconnects, bill only the received tokens) was
-> already correct.
->
-> **Impact when drain was briefly enabled in production**
-> (2026-06-06 17:00 → ~22:30, ~5.5 hours, single user user_id=2):
-> - 4,431 streaming requests overbilled
-> - Actually charged: **$1,276.28**
-> - Should have charged: **$156.31**
-> - Overcharge: **$1,119.98** (~10× per-request inflation, almost all
->   on `claude-opus-4-8` where comp_ratio × model_ratio is highest)
->
-> **Production state**: `STREAM_DRAIN_ON_CLIENT_GONE=false` is set in
-> `~/new-api-docker/.env` on `47.245.25.208`. The env var defaults to
-> false in code as well, so even a missing line is safe.
->
-> **On the NEXT upstream merge, this entire section's behavior MUST
-> be removed.** Specifically:
-> 1. Delete `StreamDrainOnClientGone` from `common/constants.go` and
->    the env-var read in `common/init.go`. The flag itself is gone —
->    no "deprecated but still readable" half-life.
-> 2. In `relay/helper/stream_scanner.go`, collapse both `if
->    common.StreamDrainOnClientGone { ... }` branches (one in the
->    inner scanner select, one in the main wait-loop select) back to
->    their unconditional pre-drain form: `MarkClientGone(...)` +
->    `SetEndReason(StreamEndReasonClientGone, ...)` + return/break.
->    The `clientGoneCh = nil` re-arming logic exists only to keep the
->    select alive while draining; without drain it's dead code.
-> 3. Revert the local commits in **reverse** order so the working
->    tree ends up in the right state:
->    ```bash
->    git revert d8a60d184  # §9 — keep, see below
->    git revert 92b501b62  # §8 — drain mode
->    # Then re-apply §9 manually (it's still useful, see note below).
->    ```
-> 4. **Keep** the `MarkClientGone` helper, the `ClientGoneDetected /
->    ClientGoneAtChunks / ClientGoneAtMs / ClientGoneError` fields on
->    `StreamStatus`, and the `appendStreamStatus` emission of those
->    fields. They're still useful for support reconciliation under the
->    correct (non-drain) logic — when end_reason='client_gone', having
->    "the client got 142 chunks over 12.5s before leaving" beats a
->    bare boolean. The frontend already renders these fields (see
->    `feat(ui): surface client_gone / client_disconnected in log
->    details`, commit 5b4a3fbb5).
-> 5. Update `FORK-CHANGES.md` to delete this §8 entirely and
->    rename / merge §9 so it stands on its own (the timing
->    annotations are independently valuable).
->
-> **Why the original "we're leaking money" theory was wrong**: the
-> ~2750 client_gone-with-ct=0 rows per day are not financial loss —
-> they're zero because upstream genuinely stopped generating tokens
-> the moment we closed its TCP socket, which is the provider-billed
-> behavior. We were billing 1:1 with what the provider charged us
-> the whole time. The drain "fix" caused us to charge customers for
-> tokens the providers were NOT charging us for, which is the actual
-> P&L damage.
->
-> The historical write-up below is kept for archaeology only.
-
----
-
-<details>
-<summary>Original (incorrect) rationale — archived</summary>
-
-- **Why**: When a downstream client disconnects mid-stream, upstream's
-  scanner immediately returns and the `defer resp.Body.Close()` kills
-  the upstream TCP connection. Providers (Anthropic, OpenAI, Azure) do
-  NOT stop their LLM inference when a downstream TCP socket goes away
-  — the GPU job keeps running until completion and the operator is
-  billed for the FULL output. Meanwhile new-api only records the
-  partial tokens the client received before disconnecting, so the
-  fork's DB-side billing is systematically less than the upstream
-  invoice. On busy traffic this is a real, ongoing P&L leak —
-  observed ~2750 client_gone-with-ct=0 rows in a single day on this
-  deployment, each leaking the full output's worth of tokens.
-- **Local commit**: `feat(stream): drain upstream after client_gone to
-  match provider billing`.
-- **Touched files**:
-  - `common/constants.go` (new `StreamDrainOnClientGone` flag) +
-    `common/init.go` (read `STREAM_DRAIN_ON_CLIENT_GONE` env var,
-    default false so behaviour only changes when operator opts in).
-  - `relay/common/stream_status.go`: new `ClientGoneDetected`,
-    `ClientGoneAtChunks`, `ClientGoneError` fields + idempotent
-    `MarkClientGone(atChunks, err)` helper. Independent of EndReason.
-  - `relay/helper/stream_scanner.go`: in both the scanner loop and the
-    main waiting select, when drain is on, observe client_gone once
-    via a one-shot `clientGoneCh` (nil'd after first observation so
-    the always-signaled `Context.Done()` channel does not starve the
-    other cases), record it, and KEEP READING. The scanner naturally
-    exits on the real upstream EOF / `[DONE]` / streaming timeout, so
-    `info.Usage` ends up populated from the full upstream stream.
-    `dataHandler` writes to a dead client socket silently fail (Go's
-    http server tolerates `EPIPE`), and the verified providers
-    (Claude / OpenAI) only call `sr.Stop()` on PARSE errors, not on
-    write errors — so the drain is safe across the standard adapters.
-  - `service/log_info_generate.go`: emit
-    `stream_status.client_gone = true` and
-    `stream_status.client_gone_at_chunks = N` whenever
-    `ClientGoneDetected` is set, independent of EndReason. So a typical
-    log row in drain mode looks like:
-    ```json
-    "stream_status": {
-      "status": "ok",
-      "end_reason": "eof",
-      "client_gone": true,
-      "client_gone_at_chunks": 142
-    }
-    ```
-    while billing reflects the full upstream output.
-- **Operational caveats**:
-  - Default is OFF (`STREAM_DRAIN_ON_CLIENT_GONE=false`). Operators
-    must opt in explicitly because draining ties up the goroutine
-    and upstream conn for the full inference duration even after the
-    client is gone — that costs concurrency. Worthwhile only if the
-    provider really bills for the full output (Anthropic, OpenAI,
-    Bedrock all do).
-  - Streaming timeout (`STREAMING_TIMEOUT`, default 300s) still
-    applies — if the upstream itself hangs after client_gone, the
-    drain is cut off and `EndReason=timeout` takes over.
-  - User charged amount is now consistent with upstream invoice, so
-    the user-visible spend on a "I cancelled after 2 seconds" request
-    may look surprisingly high. Document this behaviour to end users
-    (see the customer-facing explanation drafted alongside this
-    change in chat notes).
-- **Upstream adoption check**:
-  ```bash
-  # If upstream ever ships native drain support, drop this fork patch.
-  git log upstream/main --oneline -- relay/helper/stream_scanner.go \
-    relay/common/stream_status.go \
-  | grep -iE "drain|client.gone|continue.*read|bill.*match"
-  git grep -n "MarkClientGone\|StreamDrainOnClientGone\|ClientGoneDetected" \
-    upstream/main
-  ```
-
-</details>
-
-### 9. Annotate logs with client disconnect timing (stream + non-stream)
+### 8. Annotate logs with client disconnect timing (stream + non-stream)
 
 - **Why**: Support reconciliation needs to know *when* a client
   abandoned a request — not just *that* it did. For streams, the bare
@@ -415,17 +274,15 @@ official upstream solution** that solves the same problem.
   `http.NewRequest` uses `context.Background()` so `client.Do` finishes
   the call regardless of the downstream socket state — without
   annotation, the log row gives zero hint that the client wasn't
-  around to read the answer. (Originally introduced alongside §8 to
-  reconcile drain-mode billing, but its value is independent — keep
-  this when §8 is reverted.)
+  around to read the answer.
 - **Local commit**: `feat(log): record client-disconnect timing in
   stream and non-stream paths`.
 - **Touched files**:
   - `relay/common/stream_status.go`: `MarkClientGone` now also takes
     an `atMs int64` arg and stores it in `ClientGoneAtMs`.
   - `relay/helper/stream_scanner.go`: small `elapsedMs(info)` helper
-    derives the value from `info.StartTime`; passed at both
-    MarkClientGone call sites (drain and non-drain).
+    derives the value from `info.StartTime`; passed at the
+    MarkClientGone call site.
   - `relay/common/relay_info.go`: new top-level `ClientDisconnected`
     + `ClientDisconnectedAtMs` fields on RelayInfo. Independent of
     stream/non-stream.
@@ -445,20 +302,18 @@ official upstream solution** that solves the same problem.
     `client_disconnected: true, client_disconnected_at_ms: 8420`.
     Billing fields reflect the full upstream response (provider
     finished generating before we knew the client was gone).
-  - **Stream** + client_gone (current correct behavior, drain off):
-    `stream_status` carries `{end_reason: "client_gone", status:
-    "error", client_gone: true, client_gone_at_chunks: 142,
-    client_gone_at_ms: 12480}`. Billing reflects what the client
-    received before disconnecting (matches upstream invoice). The
-    `client_gone_at_*` fields let support answer "how much did they
-    actually get" without re-running the request.
-  - **Frontend rendering**: `5b4a3fbb5` makes the log-details dialog
-    surface these fields whenever `client_gone` (or top-level
+  - **Stream** + client_gone: `stream_status` carries
+    `{end_reason: "client_gone", status: "error", client_gone: true,
+    client_gone_at_chunks: 142, client_gone_at_ms: 12480}`. Billing
+    reflects what the client received before disconnecting (matches
+    upstream invoice — providers stop billing the moment our HTTP
+    connection closes). The `client_gone_at_*` fields let support
+    answer "how much did they actually get" without re-running the
+    request.
+  - **Frontend rendering**: §9 makes the log-details dialog surface
+    these fields whenever `client_gone` (or top-level
     `client_disconnected`) is true, independent of `status`. An amber
-    `Unplug` icon also appears in the timing column. Without that
-    commit, drain-era rows where `status='ok'` (because end_reason
-    settled to eof) hide the client-gone marker — observed live on
-    request `20260606085526827201258268d9d6UdndBu9e` before the fix.
+    `Unplug` icon also appears in the timing column.
 - **Upstream adoption check**:
   ```bash
   git grep -n "ClientDisconnected\|client_disconnected_at_ms\|ClientGoneAtMs" \
@@ -468,18 +323,18 @@ official upstream solution** that solves the same problem.
   | grep -iE "client.disconnect|client.gone|drain|abort"
   ```
 
-### 10. Surface client_gone / client_disconnected in log details UI
+### 9. Surface client_gone / client_disconnected in log details UI
 
-- **Why**: §9 makes the backend record disconnect timing on every
+- **Why**: §8 makes the backend record disconnect timing on every
   affected log row, but the default-UI details dialog (`details-
   dialog.tsx`) only revealed `stream_status` when `status !== 'ok'`.
   That gate is correct for upstream-side errors but hides the
-  client-gone marker entirely on any row where `status='ok'` — which
-  includes (a) every row written under §8's drain mode and (b)
-  potentially future upstream behaviors where a stream cleanly ends
-  but the client had already disconnected. Operators reading log
-  details for refund / reconciliation tickets need to see the
-  disconnect fields independent of the upstream-side status.
+  client-gone marker when a stream cleanly ends after the client had
+  already disconnected (rare but observed in practice — e.g. when
+  upstream finished generating before noticing the dead socket).
+  Operators reading log details for refund / reconciliation tickets
+  need to see the disconnect fields independent of the upstream-side
+  status.
 - **Local commit**: `feat(ui): surface client_gone / client_disconnected
   in log details` (5b4a3fbb5).
 - **Touched files** (all under `web/default/src/features/usage-logs/`):
@@ -501,13 +356,13 @@ official upstream solution** that solves the same problem.
     is true. Coexists with the existing red `CircleAlert` (gated on
     `stream_status.status !== 'ok'`) — both can appear on the same
     row, conveying "stream errored AND client was already gone".
-- **Effect**: Historical rows automatically benefit. The 4,431
-  drain-era rows (see §8) and every future `end_reason='client_gone'`
-  row now show disconnect timing in the UI without DB migration.
+- **Effect**: Historical rows automatically benefit — every
+  `end_reason='client_gone'` row now shows disconnect timing in the
+  UI without DB migration.
 - **Upstream adoption check**:
   ```bash
   # Skip this entry if upstream adopts both the backend annotation
-  # (§9) and a frontend that renders client_gone / client_disconnected
+  # (§8) and a frontend that renders client_gone / client_disconnected
   # independently of stream_status.status.
   git grep -n "client_gone\|client_disconnected" upstream/main \
     -- 'web/default/**'

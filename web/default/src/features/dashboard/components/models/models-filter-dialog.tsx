@@ -332,7 +332,12 @@ export function ModelsFilter(props: ModelsFilterProps) {
               <SelectTrigger>
                 <SelectValue placeholder={t('Filter by model')} />
               </SelectTrigger>
-              <SelectContent alignItemWithTrigger={false}>
+              {/* fork §1: widen the popup to ~half the modal (max-w-lg = 32rem)
+                  so long model names aren't truncated by the trigger-width default. */}
+              <SelectContent
+                alignItemWithTrigger={false}
+                className='min-w-[16rem]'
+              >
                 <SelectGroup>
                   <SelectItem value={ALL_MODELS_VALUE}>
                     {t('All Models')}

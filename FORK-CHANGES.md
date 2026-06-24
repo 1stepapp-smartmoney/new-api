@@ -17,6 +17,19 @@ official upstream solution** that solves the same problem.
 >
 > Keep entries sorted by the date the local change first landed (oldest first).
 
+> **Recent upstream merges:**
+>
+> - **2026-06-24 → upstream rc.14** (86 commits: ClickHouse log DB, dashboard
+>   traffic-flow sankey, compact `<Dialog>` wrapper, log-deletion refactor,
+>   audit auth-method tracking). Adoption check: **none of the 9 fork entries
+>   were adopted upstream — all retained.** Notable churn that required
+>   re-applying fork code on top of upstream refactors: §1 (dashboard sankey +
+>   aggregated quota queries + new Dialog wrapper), §3 (`getVChartDefaultColors`
+>   → `getDashboardChartColors`), §5 (`common.UsingMySQL` removed → log-DB-type
+>   flag), §7 (filter-bar `CommonLogDraft` rework), §9 (details-dialog +
+>   columns restructure). The §8 drain-mode feature was already dropped in the
+>   prior rc.11 merge.
+
 ---
 
 ## Active local customizations
@@ -77,14 +90,15 @@ official upstream solution** that solves the same problem.
   rotation + 4 saturation/lightness bands) and `expandPalette()`. The first N
   slots keep the brand theme colors (so the ≤5-series case is unchanged);
   beyond that the helpers emit non-colliding HSL colors. Used by both
-  `getVChartDefaultColors` (model charts) and the `userColorRange` branch in
+  `getDashboardChartColors` (model charts; upstream renamed this from
+  `getVChartDefaultColors` in rc.14) and the `userColorRange` branch in
   `processUserChartData`.
 - **Upstream adoption check**:
   ```bash
   # If upstream changes the palette-extension logic, compare diff.
   git log upstream/main --oneline -- web/default/src/features/dashboard/lib/charts.ts
   git show upstream/main:web/default/src/features/dashboard/lib/charts.ts \
-    | grep -nE "index % .*\.length|generateDistinct|expandPalette|HSL|getVChartDefaultColors"
+    | grep -nE "index % .*\.length|generateDistinct|expandPalette|HSL|getDashboardChartColors"
   ```
   If upstream introduces an equivalent palette generator (regardless of
   algorithm), drop the local `generateDistinctColors` / `expandPalette`
@@ -189,13 +203,17 @@ official upstream solution** that solves the same problem.
 - **Touched files**: `model/log.go` only.
 - **Behaviour**:
   - New helper `logsTableExprForUsername(username)`. Returns
-    `"logs USE INDEX (idx_username_created_type)"` if MySQL is the
-    active dialect AND a non-empty `username` is being filtered;
-    otherwise returns `"logs"`.
+    `"logs USE INDEX (idx_username_created_type)"` if the **log database**
+    is MySQL AND a non-empty `username` is being filtered; otherwise
+    returns `"logs"`. (rc.14 churn: upstream removed `common.UsingMySQL`
+    when it split main/log DB flags for ClickHouse support, so this now
+    gates on `common.UsingLogDatabase(common.DatabaseTypeMySQL)` —
+    strictly correct since the hint targets `LOG_DB`.)
   - `SumUsedQuota` and `GetAllLogs` use it when constructing their
-    GORM `Table(...)` expression. SQLite / PostgreSQL paths are
-    untouched (those dialects don't understand `USE INDEX` syntax and
-    don't suffer the optimizer mis-estimate).
+    GORM `Table(...)` expression. SQLite / PostgreSQL / ClickHouse paths
+    are untouched (those dialects don't understand `USE INDEX` syntax and
+    don't suffer the optimizer mis-estimate). Upstream's
+    `COALESCE(sum(...), 0)` NULL-guards in `SumUsedQuota` are preserved.
 - **Upstream adoption check**:
   ```bash
   # If upstream rewrites the stat queries (e.g. adds materialized

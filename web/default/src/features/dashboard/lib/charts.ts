@@ -38,34 +38,11 @@ type TooltipLineItem = {
   shapeSize?: number
 }
 
-const THEME_CHART_COLOR_VARIABLES = [
-  '--chart-1',
-  '--chart-2',
-  '--chart-3',
-  '--chart-4',
-  '--chart-5',
-] as const
-
-function getThemeChartColors(themeKey?: string): string[] {
-  if (typeof document === 'undefined') return []
-  void themeKey
-
-  const bodyStyle = window.getComputedStyle(document.body)
-  const rootStyle = window.getComputedStyle(document.documentElement)
-
-  return THEME_CHART_COLOR_VARIABLES.map((name) => {
-    return (
-      bodyStyle.getPropertyValue(name) || rootStyle.getPropertyValue(name)
-    ).trim()
-  }).filter(Boolean)
-}
-
-// Generate N visually distinct colors via golden-angle hue rotation.
-// Consecutive hues are spaced ~137.5° apart so neighbouring series never
-// land on close colors; alternating saturation/lightness bands further
-// separate hues that eventually wrap around the circle. Used to extend a
-// base palette instead of the old `index % palette.length` repetition,
-// which produced exact-duplicate colors once series exceeded the palette.
+// fork §3: distinct-color helpers. The theme exposes only ~5 chart colors, so
+// beyond that consumers using `colors[i % len]` collide. generateDistinctColors
+// emits non-colliding HSL colors (golden-angle hue rotation + 4 sat/light
+// bands); expandPalette keeps the first N brand colors then tops up with
+// generated ones, so the ≤palette case is unchanged.
 function generateDistinctColors(count: number, startIndex = 0): string[] {
   const GOLDEN_ANGLE = 137.508
   const bands = [
@@ -82,28 +59,23 @@ function generateDistinctColors(count: number, startIndex = 0): string[] {
   })
 }
 
-// Return exactly `count` colors. Branded base colors are kept for the first
-// slots (preserving the theme look for the common small-series case); any
-// extra slots are filled with generated distinct colors so large model sets
-// never reuse / collide on colors.
 function expandPalette(base: string[], count: number): string[] {
   if (count <= base.length) return base.slice(0, count)
   if (base.length === 0) return generateDistinctColors(count)
   return [...base, ...generateDistinctColors(count - base.length, base.length)]
 }
 
-function getVChartDefaultColors(domainLength: number, themeKey?: string) {
-  const themeColors = getThemeChartColors(themeKey)
-  if (themeColors.length > 0) {
-    return expandPalette(themeColors, domainLength)
-  }
-
+export function getDashboardChartColors(domainLength: number): string[] {
   const scheme =
     vchartDefaultDataScheme.find(
       (item) => !item.maxDomainLength || domainLength <= item.maxDomainLength
     ) ?? vchartDefaultDataScheme[vchartDefaultDataScheme.length - 1]
 
-  return expandPalette(scheme.scheme, domainLength)
+  const base = scheme.scheme.filter(
+    (color): color is string => typeof color === 'string'
+  )
+  // fork §3: ensure at least domainLength non-colliding colors.
+  return expandPalette(base, domainLength)
 }
 
 function renderQuotaCompat(rawQuota: number, digits = 4): string {
@@ -127,7 +99,6 @@ export function processChartData(
   data: QuotaDataItem[],
   timeGranularity: TimeGranularity = 'day',
   t?: TFunction,
-  themeKey?: string,
   chartCornerRadius?: number
 ): ProcessedChartData {
   const tt: TFunction = t ?? ((x) => x)
@@ -319,10 +290,7 @@ export function processChartData(
   const sortedTimes = Array.from(timeModelMap.keys()).sort()
   const sortedModels = [...allModels].sort()
   const modelColorDomain = Array.from(new Set([...sortedModels, otherLabel]))
-  const modelColorRange = getVChartDefaultColors(
-    modelColorDomain.length,
-    themeKey
-  )
+  const modelColorRange = getDashboardChartColors(modelColorDomain.length)
   const otherColor = modelColorRange[modelColorDomain.indexOf(otherLabel)]
   const otherTooltipColor =
     typeof otherColor === 'string' ? otherColor : '#FF8A00'
@@ -748,7 +716,7 @@ export function processChartData(
   }
 }
 
-const USER_COLOR_FALLBACKS = [
+const USER_COLORS = [
   '#5B8FF9',
   '#5AD8A6',
   '#F6BD16',
@@ -765,17 +733,11 @@ export function processUserChartData(
   data: QuotaDataItem[],
   timeGranularity: TimeGranularity = 'day',
   t?: TFunction,
-  limit = 10,
-  themeKey?: string
+  limit = 10
 ): ProcessedUserChartData {
   const tt: TFunction = t ?? ((x) => x)
   const { config } = getCurrencyDisplay()
   const quotaPerUnit = config.quotaPerUnit
-  const themeUserColors = getThemeChartColors(themeKey)
-  const userColorRange =
-    themeUserColors.length > 0
-      ? expandPalette(themeUserColors, Math.max(limit, themeUserColors.length))
-      : expandPalette(USER_COLOR_FALLBACKS, limit)
 
   const formatVal = (raw: number) => renderQuotaCompat(raw, 2)
 
@@ -793,7 +755,7 @@ export function processUserChartData(
         subtext: tt('No data available'),
       },
       legends: { visible: false },
-      color: { type: 'ordinal', range: userColorRange },
+      color: { type: 'ordinal', range: USER_COLORS },
       background: { fill: 'transparent' },
     },
     spec_user_trend: {
@@ -808,7 +770,7 @@ export function processUserChartData(
         subtext: tt('No data available'),
       },
       legends: { visible: true, selectMode: 'single' },
-      color: { type: 'ordinal', range: userColorRange },
+      color: { type: 'ordinal', range: USER_COLORS },
       point: { visible: false },
       background: { fill: 'transparent' },
     },
@@ -836,9 +798,12 @@ export function processUserChartData(
     Usage: Number((quota / quotaPerUnit).toFixed(4)),
   }))
 
+  // fork §3: expand USER_COLORS so >palette users get distinct colors instead
+  // of cycling (USER_COLORS[i % len] collides past the palette size).
+  const userColorRange = expandPalette(USER_COLORS, topUsers.length)
   const userColorMap = topUsers.reduce<Record<string, string>>(
     (acc, user, i) => {
-      acc[user] = userColorRange[i % userColorRange.length]
+      acc[user] = userColorRange[i]
       return acc
     },
     {}

@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useState } from 'react'
 import { type ColumnDef } from '@tanstack/react-table'
-import { CircleAlert, Sparkles, KeyRound, Unplug } from 'lucide-react'
+import { CircleAlert, GitBranch, Sparkles, KeyRound, Unplug } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { getUserAvatarFallback, getUserAvatarStyle } from '@/lib/avatar'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
@@ -29,6 +29,11 @@ import {
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover'
 import {
   Tooltip,
   TooltipContent,
@@ -269,7 +274,7 @@ function buildDetailSegments(
 
 export function useCommonLogsColumns(
   isAdmin: boolean,
-  isRoot: boolean
+  isRoot: boolean // fork §4: gates the root-only IP column
 ): ColumnDef<UsageLog>[] {
   const { t } = useTranslation()
   const columns: ColumnDef<UsageLog>[] = [
@@ -321,16 +326,23 @@ export function useCommonLogsColumns(
 
           const other = parseLogOther(log.other)
           const affinity = other?.admin_info?.channel_affinity
-          const useChannel = other?.admin_info?.use_channel
+          const rawUseChannel = other?.admin_info?.use_channel ?? []
+          const useChannel = Array.isArray(rawUseChannel)
+            ? rawUseChannel.map(String).filter(Boolean)
+            : []
+          const hasRetryChain = useChannel.length > 1
           const channelChain =
-            useChannel && useChannel.length > 0
-              ? useChannel.join(' → ')
-              : undefined
+            hasRetryChain ? useChannel.join(' → ') : undefined
           const channelDisplay = log.channel_name
             ? `${log.channel_name} #${log.channel}`
             : `#${log.channel}`
           const channelIdDisplay = `#${log.channel}`
           const channelName = sensitiveVisible ? log.channel_name : '••••'
+          const multiKeyIndex = other?.admin_info?.multi_key_index
+          const showMultiKeyIndex =
+            other?.admin_info?.is_multi_key === true &&
+            typeof multiKeyIndex === 'number' &&
+            Number.isFinite(multiKeyIndex)
 
           return (
             <TooltipProvider>
@@ -340,7 +352,7 @@ export function useCommonLogsColumns(
                     <div className='flex max-w-[160px] flex-col gap-0.5' />
                   }
                 >
-                  <div className='relative inline-flex w-fit'>
+                  <div className='relative inline-flex w-fit items-center gap-1'>
                     <StatusBadge
                       label={channelIdDisplay}
                       autoColor={String(log.channel)}
@@ -349,6 +361,48 @@ export function useCommonLogsColumns(
                       showDot={false}
                       className='font-mono'
                     />
+                    {showMultiKeyIndex && (
+                      <StatusBadge
+                        label={String(multiKeyIndex)}
+                        size='sm'
+                        showDot={false}
+                        copyable={false}
+                        variant='neutral'
+                        className='h-5 min-w-5 justify-center rounded-full px-1 font-mono text-xs'
+                        aria-label={`${t('Key')} ${multiKeyIndex}`}
+                      />
+                    )}
+                    {hasRetryChain && (
+                      <Popover>
+                        <PopoverTrigger
+                          render={
+                            <button
+                              type='button'
+                              className='text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex size-5 shrink-0 items-center justify-center rounded-full transition-colors focus-visible:ring-2 focus-visible:outline-none'
+                              aria-label={t('Retry Chain')}
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          }
+                        >
+                          <GitBranch
+                            className='size-3.5 text-amber-500'
+                            aria-hidden='true'
+                          />
+                        </PopoverTrigger>
+                        <PopoverContent
+                          side='top'
+                          align='start'
+                          className='w-64 text-xs'
+                        >
+                          <div className='flex flex-col gap-1'>
+                            <p className='font-medium'>{t('Retry Chain')}</p>
+                            <p className='text-muted-foreground font-mono break-all'>
+                              {channelChain}
+                            </p>
+                          </div>
+                        </PopoverContent>
+                      </Popover>
+                    )}
                     {affinity && (
                       <button
                         type='button'
@@ -385,6 +439,11 @@ export function useCommonLogsColumns(
                     {channelChain && (
                       <p className='text-muted-foreground text-xs'>
                         {t('Chain')}: {channelChain}
+                      </p>
+                    )}
+                    {showMultiKeyIndex && (
+                      <p className='text-muted-foreground text-xs'>
+                        {t('Key')}: {multiKeyIndex}
                       </p>
                     )}
                     {affinity && (
@@ -467,10 +526,8 @@ export function useCommonLogsColumns(
     )
   }
 
-  // Root-only IP column. Mirrors the admin block above but is gated on the
-  // stronger `isRoot` predicate. The backend already strips `Log.Ip` for
-  // non-root callers (controller/log.go), so even if a non-root user
-  // un-hid the column via dev-tools the cell would render empty.
+  // fork §4: root-only IP column. Backend strips Log.Ip for non-root callers,
+  // so even a dev-tools-unhidden column renders empty for non-root.
   if (isRoot) {
     columns.push({
       id: 'ip',
@@ -600,11 +657,11 @@ export function useCommonLogsColumns(
 
         const timingBgMap: Record<string, string> = {
           success:
-            'border border-emerald-200/40 bg-emerald-50/35 dark:border-emerald-900/40 dark:bg-emerald-950/15',
+            'border border-emerald-200/40 bg-emerald-50/35 !text-emerald-600 dark:border-emerald-900/40 dark:bg-emerald-950/15 dark:!text-emerald-400',
           warning:
-            'border border-amber-200/45 bg-amber-50/35 dark:border-amber-900/40 dark:bg-amber-950/15',
+            'border border-amber-200/45 bg-amber-50/35 !text-amber-600 dark:border-amber-900/40 dark:bg-amber-950/15 dark:!text-amber-400',
           danger:
-            'border border-rose-200/50 bg-rose-50/35 dark:border-rose-900/40 dark:bg-rose-950/15',
+            'border border-rose-200/50 bg-rose-50/35 !text-red-600 dark:border-rose-900/40 dark:bg-rose-950/15 dark:!text-red-400',
           neutral:
             'border border-border/60 bg-muted/30 dark:border-border/40 dark:bg-muted/20',
         }
@@ -681,12 +738,11 @@ export function useCommonLogsColumns(
                     </Tooltip>
                   </TooltipProvider>
                 )}
-              {/* Client-disconnect indicator. Independent of stream_status.status
-                  because under STREAM_DRAIN_ON_CLIENT_GONE the stream still
-                  ends with status='ok' / end_reason='eof', but the client
-                  abandoned mid-flight — operators need to see that.
-                  Covers both streaming (stream_status.client_gone) and
-                  non-streaming (top-level client_disconnected). */}
+              {/* fork §9: client-disconnect indicator. Shown whenever the
+                  downstream client disconnected — for streams via
+                  stream_status.client_gone, for non-stream via top-level
+                  client_disconnected. Independent of the error indicator
+                  above (a stream can end cleanly yet the client left early). */}
               {(other?.stream_status?.client_gone ||
                 other?.client_disconnected) && (
                 <TooltipProvider>

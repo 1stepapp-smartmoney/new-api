@@ -67,6 +67,27 @@ const (
 	LogTypeLogin   = 7
 )
 
+func ensureLogRequestId(log *Log) {
+	if log != nil && log.RequestId == "" {
+		log.RequestId = common.NewRequestId()
+	}
+}
+
+func createLog(log *Log) error {
+	ensureLogRequestId(log)
+	return LOG_DB.Create(log).Error
+}
+
+func clickHouseLogOrder(prefix string) string {
+	return prefix + "created_at desc, " + prefix + "request_id desc"
+}
+
+func assignDisplayLogIds(logs []*Log, startIdx int) {
+	for i := range logs {
+		logs[i].Id = startIdx + i + 1
+	}
+}
+
 func formatUserLogs(logs []*Log, startIdx int) {
 	for i := range logs {
 		logs[i].ChannelName = ""
@@ -81,12 +102,16 @@ func formatUserLogs(logs []*Log, startIdx int) {
 			delete(otherMap, "stream_status")
 		}
 		logs[i].Other = common.MapToJsonStr(otherMap)
-		logs[i].Id = startIdx + i + 1
 	}
+	assignDisplayLogIds(logs, startIdx)
 }
 
 func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
-	err = LOG_DB.Model(&Log{}).Where("token_id = ?", tokenId).Order("id desc").Limit(common.MaxRecentItems).Find(&logs).Error
+	order := "id desc"
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		order = clickHouseLogOrder("")
+	}
+	err = LOG_DB.Model(&Log{}).Where("token_id = ?", tokenId).Order(order).Limit(common.MaxRecentItems).Find(&logs).Error
 	formatUserLogs(logs, 0)
 	return logs, err
 }
@@ -103,7 +128,7 @@ func RecordLog(userId int, logType int, content string) {
 		Type:      logType,
 		Content:   content,
 	}
-	err := LOG_DB.Create(log).Error
+	err := createLog(log)
 	if err != nil {
 		common.SysLog("failed to record log: " + err.Error())
 	}
@@ -128,7 +153,7 @@ func RecordLogWithAdminInfo(userId int, logType int, content string, adminInfo m
 		}
 		log.Other = common.MapToJsonStr(other)
 	}
-	if err := LOG_DB.Create(log).Error; err != nil {
+	if err := createLog(log); err != nil {
 		common.SysLog("failed to record log: " + err.Error())
 	}
 }
@@ -165,7 +190,7 @@ func RecordLoginLog(userId int, username string, content string, ip string, acti
 		Ip:        ip,
 		Other:     common.MapToJsonStr(other),
 	}
-	if err := LOG_DB.Create(log).Error; err != nil {
+	if err := createLog(log); err != nil {
 		common.SysLog("failed to record login log: " + err.Error())
 	}
 }
@@ -196,7 +221,7 @@ func RecordOperationAuditLog(logUserId int, content string, ip string, action st
 		Ip:        ip,
 		Other:     common.MapToJsonStr(other),
 	}
-	if err := LOG_DB.Create(log).Error; err != nil {
+	if err := createLog(log); err != nil {
 		common.SysLog("failed to record operation audit log: " + err.Error())
 	}
 }
@@ -223,7 +248,7 @@ func RecordTopupLog(userId int, content string, callerIp string, paymentMethod s
 		Ip:        callerIp,
 		Other:     common.MapToJsonStr(other),
 	}
-	err := LOG_DB.Create(log).Error
+	err := createLog(log)
 	if err != nil {
 		common.SysLog("failed to record topup log: " + err.Error())
 	}
@@ -237,7 +262,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
 	otherStr := common.MapToJsonStr(other)
 	// 判断是否需要记录 IP
-	needRecordIp := common.ForceRecordIpLog
+	needRecordIp := common.ForceRecordIpLog // fork §4: operator-forced IP recording
 	if !needRecordIp {
 		if settingMap, err := GetUserSetting(userId, false); err == nil {
 			if settingMap.RecordIpLog {
@@ -271,7 +296,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 		UpstreamRequestId: upstreamRequestId,
 		Other:             otherStr,
 	}
-	err := LOG_DB.Create(log).Error
+	err := createLog(log)
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
 	}
@@ -300,9 +325,10 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
+	createdAt := common.GetTimestamp()
 	otherStr := common.MapToJsonStr(params.Other)
 	// 判断是否需要记录 IP
-	needRecordIp := common.ForceRecordIpLog
+	needRecordIp := common.ForceRecordIpLog // fork §4: operator-forced IP recording
 	if !needRecordIp {
 		if settingMap, err := GetUserSetting(userId, false); err == nil {
 			if settingMap.RecordIpLog {
@@ -313,7 +339,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	log := &Log{
 		UserId:           userId,
 		Username:         username,
-		CreatedAt:        common.GetTimestamp(),
+		CreatedAt:        createdAt,
 		Type:             LogTypeConsume,
 		Content:          params.Content,
 		PromptTokens:     params.PromptTokens,
@@ -336,13 +362,24 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		UpstreamRequestId: upstreamRequestId,
 		Other:             otherStr,
 	}
-	err := LOG_DB.Create(log).Error
+	err := createLog(log)
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
 	}
 	if common.DataExportEnabled {
 		gopool.Go(func() {
-			LogQuotaData(userId, username, params.ModelName, params.Quota, common.GetTimestamp(), params.PromptTokens+params.CompletionTokens)
+			LogQuotaData(QuotaDataLogParams{
+				UserID:    userId,
+				Username:  username,
+				ModelName: params.ModelName,
+				Quota:     params.Quota,
+				CreatedAt: createdAt,
+				TokenUsed: params.PromptTokens + params.CompletionTokens,
+				UseGroup:  params.Group,
+				TokenID:   params.TokenId,
+				ChannelID: params.ChannelId,
+				NodeName:  common.NodeName,
+			})
 		})
 	}
 }
@@ -370,10 +407,11 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 			tokenName = token.Name
 		}
 	}
+	createdAt := common.GetTimestamp()
 	log := &Log{
 		UserId:    params.UserId,
 		Username:  username,
-		CreatedAt: common.GetTimestamp(),
+		CreatedAt: createdAt,
 		Type:      params.LogType,
 		Content:   params.Content,
 		TokenName: tokenName,
@@ -384,19 +422,35 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 		Group:     params.Group,
 		Other:     common.MapToJsonStr(params.Other),
 	}
-	err := LOG_DB.Create(log).Error
+	err := createLog(log)
 	if err != nil {
 		common.SysLog("failed to record task billing log: " + err.Error())
+	}
+	if params.LogType == LogTypeConsume && common.DataExportEnabled {
+		gopool.Go(func() {
+			LogQuotaData(QuotaDataLogParams{
+				UserID:    params.UserId,
+				Username:  username,
+				ModelName: params.ModelName,
+				Quota:     params.Quota,
+				CreatedAt: createdAt,
+				UseGroup:  params.Group,
+				TokenID:   params.TokenId,
+				ChannelID: params.ChannelId,
+				NodeName:  common.NodeName,
+			})
+		})
 	}
 }
 
 func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string, ip string, isStream string) (logs []*Log, total int64, err error) {
-	// Force the (username, created_at, type) composite index on MySQL when an
-	// admin searches by username. See logsTableExprForUsername for rationale.
+	// fork §5: force the (username, created_at, type) composite index on MySQL
+	// when an admin searches by username. See logsTableExprForUsername.
 	tx := LOG_DB.Table(logsTableExprForUsername(username))
 	if logType != LogTypeUnknown {
 		tx = tx.Where("logs.type = ?", logType)
 	}
+	// fork §7: optional stream / non-stream filter
 	if streamFlag, ok := parseIsStreamFilter(isStream); ok {
 		tx = tx.Where("logs.is_stream = ?", streamFlag)
 	}
@@ -428,9 +482,7 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 	if group != "" {
 		tx = tx.Where("logs."+logGroupCol+" = ?", group)
 	}
-	// IP supports exact match (no wildcard) or prefix wildcard "1.2.*".
-	// Empty / "*" means no filter. Index on logs.ip is used for exact and
-	// prefix queries, so admin filtering stays fast on large log tables.
+	// fork §4: IP filter — exact match, or prefix wildcard "1.2.*". Empty/"*" = no filter.
 	if ip != "" && ip != "*" {
 		if strings.Contains(ip, "*") {
 			tx = tx.Where("logs.ip LIKE ?", strings.ReplaceAll(ip, "*", "%"))
@@ -442,9 +494,16 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 	if err != nil {
 		return nil, 0, err
 	}
-	err = tx.Order("logs.created_at desc, logs.id desc").Limit(num).Offset(startIdx).Find(&logs).Error
+	order := "logs.created_at desc, logs.id desc"
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		order = clickHouseLogOrder("logs.")
+	}
+	err = tx.Order(order).Limit(num).Offset(startIdx).Find(&logs).Error
 	if err != nil {
 		return nil, 0, err
+	}
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		assignDisplayLogIds(logs, startIdx)
 	}
 
 	channelIds := types.NewSet[int]()
@@ -499,6 +558,7 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 	} else {
 		tx = LOG_DB.Where("logs.user_id = ? and logs.type = ?", userId, logType)
 	}
+	// fork §7: optional stream / non-stream filter
 	if streamFlag, ok := parseIsStreamFilter(isStream); ok {
 		tx = tx.Where("logs.is_stream = ?", streamFlag)
 	}
@@ -524,7 +584,7 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 	if group != "" {
 		tx = tx.Where("logs."+logGroupCol+" = ?", group)
 	}
-	// Same exact / wildcard semantics as GetAllLogs.
+	// fork §4: same exact / wildcard IP semantics as GetAllLogs.
 	if ip != "" && ip != "*" {
 		if strings.Contains(ip, "*") {
 			tx = tx.Where("logs.ip LIKE ?", strings.ReplaceAll(ip, "*", "%"))
@@ -537,7 +597,11 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 		common.SysError("failed to count user logs: " + err.Error())
 		return nil, 0, errors.New("查询日志失败")
 	}
-	err = tx.Order("logs.id desc").Limit(num).Offset(startIdx).Find(&logs).Error
+	order := "logs.id desc"
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		order = clickHouseLogOrder("logs.")
+	}
+	err = tx.Order(order).Limit(num).Offset(startIdx).Find(&logs).Error
 	if err != nil {
 		common.SysError("failed to search user logs: " + err.Error())
 		return nil, 0, errors.New("查询日志失败")
@@ -547,25 +611,13 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 	return logs, total, err
 }
 
-type Stat struct {
-	Quota int `json:"quota"`
-	Rpm   int `json:"rpm"`
-	Tpm   int `json:"tpm"`
-}
-
 // parseIsStreamFilter interprets the API-level `is_stream` query value as a
-// boolean filter. The second return is false when the caller wants ALL rows
-// (no filter); true means the bool in the first return should be applied as
-// `WHERE is_stream = ?`. Accepts a liberal set of inputs so both the
-// frontend dropdown and ad-hoc curl calls work:
-//
-//   ""           → no filter
-//   "all" / "any" / "*" → no filter
-//   "1" / "true"  / "stream"     / "yes" → is_stream = true
-//   "0" / "false" / "non_stream" / "no"  → is_stream = false
-//
-// Any other value is treated as "no filter" rather than rejected, to keep
-// log-list calls resilient to bad client input.
+// boolean filter (fork §7). Second return false = no filter (all rows). Accepts
+// a liberal input set so the frontend dropdown and ad-hoc calls both work:
+//   "" / "all" / "any" / "*"                       → no filter
+//   "1" / "true"  / "stream"     / "yes"           → is_stream = true
+//   "0" / "false" / "non_stream" / "no"            → is_stream = false
+// Unknown values are treated as no filter rather than rejected.
 func parseIsStreamFilter(value string) (bool, bool) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "1", "true", "stream", "yes":
@@ -577,28 +629,34 @@ func parseIsStreamFilter(value string) (bool, bool) {
 	}
 }
 
-// logsTableExprForUsername returns the FROM-clause expression for queries
-// filtered by `username`. On MySQL we force the (username, created_at, type)
-// composite index because the cost-based optimizer underweights the heavy
-// users: when a single user holds the majority of the rows (e.g. a load-test
-// account producing ~50% of the table) MySQL estimates a full-table scan as
-// cheaper and finishes in ~40 s, while the composite index runs in ~3 s.
-// SQLite and PostgreSQL don't have this problem (different optimizers) and
-// also don't accept the `USE INDEX` syntax — so we only inject the hint on
-// MySQL and only when a username filter is actually present.
+// logsTableExprForUsername returns the FROM-clause expression for username-filtered
+// queries (fork §5). On a MySQL log database we force the (username, created_at,
+// type) composite index because the optimizer otherwise mis-estimates a heavy
+// user's rows and falls back to a full scan (~40s vs ~3s). SQLite / PostgreSQL /
+// ClickHouse don't have this problem and don't accept USE INDEX syntax, so the
+// hint is gated on the log DB being MySQL. (upstream removed common.UsingMySQL,
+// so this gates on UsingLogDatabase(MySQL) — strictly correct since it targets LOG_DB.)
 func logsTableExprForUsername(username string) string {
-	if username != "" && common.UsingMySQL {
+	if username != "" && common.UsingLogDatabase(common.DatabaseTypeMySQL) {
 		return "logs USE INDEX (idx_username_created_type)"
 	}
 	return "logs"
 }
 
+type Stat struct {
+	Quota int `json:"quota"`
+	Rpm   int `json:"rpm"`
+	Tpm   int `json:"tpm"`
+}
+
 func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
+	// fork §5: USE INDEX hint on MySQL log DB for username-filtered stats;
+	// upstream's COALESCE(...,0) NULL-guards are preserved.
 	tableExpr := logsTableExprForUsername(username)
-	tx := LOG_DB.Table(tableExpr).Select("sum(quota) quota")
+	tx := LOG_DB.Table(tableExpr).Select("COALESCE(sum(quota), 0) quota")
 
 	// 为rpm和tpm创建单独的查询
-	rpmTpmQuery := LOG_DB.Table(tableExpr).Select("count(*) rpm, sum(prompt_tokens) + sum(completion_tokens) tpm")
+	rpmTpmQuery := LOG_DB.Table(tableExpr).Select("count(*) rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) tpm")
 
 	if tx, err = applyExplicitLogTextFilter(tx, "username", username); err != nil {
 		return stat, err
@@ -651,7 +709,7 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 }
 
 func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string) (token int) {
-	tx := LOG_DB.Table("logs").Select("ifnull(sum(prompt_tokens),0) + ifnull(sum(completion_tokens),0)")
+	tx := LOG_DB.Table("logs").Select("COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0)")
 	if username != "" {
 		tx = tx.Where("username = ?", username)
 	}
@@ -671,7 +729,55 @@ func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	return token
 }
 
+func CountOldLog(ctx context.Context, targetTimestamp int64) (int64, error) {
+	var total int64
+	if err := LOG_DB.WithContext(ctx).Model(&Log{}).Where("created_at < ?", targetTimestamp).Count(&total).Error; err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+func DeleteOldLogBatch(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if nil != ctx.Err() {
+		return 0, ctx.Err()
+	}
+
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		// ClickHouse DELETE is a heavy mutation that rewrites data parts, so
+		// per-batch mutations would be pathologically slow. Remove all matching
+		// rows in a single synchronous mutation regardless of limit; the reported
+		// count lets the caller's progress loop complete in one pass.
+		total, err := CountOldLog(ctx, targetTimestamp)
+		if err != nil {
+			return 0, err
+		}
+		if total == 0 {
+			return 0, nil
+		}
+		if err := LOG_DB.WithContext(ctx).Exec(
+			"ALTER TABLE logs DELETE WHERE created_at < ? SETTINGS mutations_sync = 1",
+			targetTimestamp,
+		).Error; err != nil {
+			return 0, err
+		}
+		return total, nil
+	}
+
+	result := LOG_DB.WithContext(ctx).Where("created_at < ?", targetTimestamp).Limit(limit).Delete(&Log{})
+	if nil != result.Error {
+		return 0, result.Error
+	}
+	return result.RowsAffected, nil
+}
+
 func DeleteOldLog(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
 	var total int64 = 0
 
 	for {
@@ -679,14 +785,14 @@ func DeleteOldLog(ctx context.Context, targetTimestamp int64, limit int) (int64,
 			return total, ctx.Err()
 		}
 
-		result := LOG_DB.Where("created_at < ?", targetTimestamp).Limit(limit).Delete(&Log{})
-		if nil != result.Error {
-			return total, result.Error
+		rowsAffected, err := DeleteOldLogBatch(ctx, targetTimestamp, limit)
+		if nil != err {
+			return total, err
 		}
 
-		total += result.RowsAffected
+		total += rowsAffected
 
-		if result.RowsAffected < int64(limit) {
+		if rowsAffected < int64(limit) {
 			break
 		}
 	}

@@ -11,6 +11,20 @@ const semiUiDir = path.resolve(
   '../..',
 )
 
+// fork: Semi Design pulls date-fns-tz@1.x, whose code imports date-fns v2
+// internal subpaths (date-fns/format/index.js, date-fns/_lib/*). The web/
+// workspace hoists date-fns v4 (the default app's dependency) to the top of
+// node_modules, so date-fns-tz resolves v4 and the build fails (v4 dropped
+// those subpath exports). Semi ships a nested date-fns@2 under semi-foundation;
+// alias every date-fns import in the classic build to that v2 copy. Classic-
+// scoped (the classic app only uses date-fns via Semi's v2 API); the default
+// app's date-fns v4 is untouched.
+const dateFnsV2Dir = path.dirname(
+  require.resolve('date-fns/package.json', {
+    paths: [path.dirname(require.resolve('@douyinfe/semi-foundation'))],
+  }),
+)
+
 export default defineConfig(({ envMode }) => {
   const env = loadEnv({ mode: envMode, prefixes: ['VITE_'] })
   const clientServerUrl =
@@ -47,6 +61,10 @@ export default defineConfig(({ envMode }) => {
           semiUiDir,
           'dist/css/semi.css',
         ),
+        // fork: force date-fns v2 for the classic build (see dateFnsV2Dir note).
+        // Prefix alias (no `$`) so both `date-fns` and `date-fns/...` subpath
+        // imports from date-fns-tz resolve into the v2 package.
+        'date-fns': dateFnsV2Dir,
       },
     },
     html: {

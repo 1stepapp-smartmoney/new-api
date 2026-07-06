@@ -301,6 +301,20 @@ official upstream solution** that solves the same problem.
   - `relay/helper/stream_scanner.go`: small `elapsedMs(info)` helper
     derives the value from `info.StartTime`; passed at the
     MarkClientGone call site.
+  - **Upstream churn note (rc.18 merge, 2026-07-07)**: upstream
+    `153d7f01a fix: avoid stale stream writes after client disconnect
+    (#5710)` rewrote this file (~137 lines): goroutine-lifecycle fix
+    (unconditional `wg.Wait` via `cleanup()`, close `resp.Body` in
+    cleanup), a bounded per-write `streamWriteTimeout`, and — matching
+    this fork's own §8/dropped-drain conclusion — it **independently
+    dropped drain-on-disconnect** (client gone ⇒ immediate cleanup, no
+    billing for post-disconnect tokens). The scanner-loop no longer has
+    its own client-disconnect case (upstream handles it via the main
+    select + cleanup). The fork's `MarkClientGone(...)` telemetry was
+    re-applied to the **main-loop** `c.Request.Context().Done()` case
+    only (the single-shot select replaces the old `waitLoop`), where
+    `info.ReceivedResponseCount` still reflects chunks delivered at
+    disconnect.
   - `relay/common/relay_info.go`: new top-level `ClientDisconnected`
     + `ClientDisconnectedAtMs` fields on RelayInfo. Independent of
     stream/non-stream.

@@ -16,12 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useState } from 'react'
 import { Filter, RotateCcw, Calendar, Search } from 'lucide-react'
+import { useEffect, useState } from 'react' // fork §1: useEffect for lazy model load
 import { useTranslation } from 'react-i18next'
-import { useAuthStore } from '@/stores/auth-store'
-import { getRollingDateRange, type TimeGranularity } from '@/lib/time'
-import { cn } from '@/lib/utils'
+
+import { DateTimePicker } from '@/components/datetime-picker'
+import { Dialog } from '@/components/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -34,8 +34,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { DateTimePicker } from '@/components/datetime-picker'
-import { Dialog } from '@/components/dialog'
 import { getQuotaDataModels } from '@/features/dashboard/api' // fork §1
 import {
   TIME_GRANULARITY_OPTIONS,
@@ -49,6 +47,9 @@ import type {
   DashboardChartPreferences,
   DashboardFilters,
 } from '@/features/dashboard/types'
+import { getRollingDateRange, type TimeGranularity } from '@/lib/time'
+import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/auth-store'
 
 const ALL_MODELS_VALUE = '__all__' // fork §1: sentinel meaning "no model filter"
 
@@ -106,7 +107,8 @@ export function ModelsFilter(props: ModelsFilterProps) {
 
   const [open, setOpen] = useState(false)
   const [filters, setFilters] = useState<DashboardFilters>(
-    () => props.currentFilters ?? buildDefaultDashboardFilters(props.preferences)
+    () =>
+      props.currentFilters ?? buildDefaultDashboardFilters(props.preferences)
   )
   const [selectedRange, setSelectedRange] = useState<number | null>(() =>
     detectQuickRangeDays(props.currentFilters)

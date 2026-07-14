@@ -175,56 +175,26 @@ official upstream solution** that solves the same problem.
   If upstream lands an equivalent operator toggle and an `ip` query
   parameter, drop the local diff and switch to the upstream knob.
 
-### 5. MySQL USE INDEX hint for log queries filtered by username
+### 5. ~~MySQL USE INDEX hint for log queries filtered by username~~ (RETIRED — rc.21)
 
-- **Why**: On large `logs` tables where one user holds most of the rows
-  (e.g. a load-test or migration account producing ~50 % of the data),
-  MySQL's cost-based optimizer mis-estimates the composite username
-  index as more expensive than a full table scan. A 24-hour
-  `SumUsedQuota` runs in ~3 s with the index but ~40 s without — and
-  worse, the optimizer keeps picking the slow plan even after
-  `ANALYZE TABLE`. The log-stat endpoint fires on every visit to the
-  usage-logs page, so the regression is user-visible (page hangs for
-  ~75 s).
-- **Operator prerequisite**: composite indexes must exist on `logs`. Run
-  in production via:
-  ```sql
-  ALTER TABLE logs
-    ADD INDEX idx_user_created (user_id, created_at),
-    ALGORITHM=INPLACE, LOCK=NONE;
-  ALTER TABLE logs
-    ADD INDEX idx_username_created_type (username, created_at, type),
-    ALGORITHM=INPLACE, LOCK=NONE;
-  ```
-  Upstream auto-migration does NOT create these indexes. New deployments
-  need to run them manually.
-- **Local commit**: `fix(log): use composite index hint on MySQL for
-  username-filtered log queries`.
-- **Touched files**: `model/log.go` only.
-- **Behaviour**:
-  - New helper `logsTableExprForUsername(username)`. Returns
-    `"logs USE INDEX (idx_username_created_type)"` if the **log database**
-    is MySQL AND a non-empty `username` is being filtered; otherwise
-    returns `"logs"`. (rc.14 churn: upstream removed `common.UsingMySQL`
-    when it split main/log DB flags for ClickHouse support, so this now
-    gates on `common.UsingLogDatabase(common.DatabaseTypeMySQL)` —
-    strictly correct since the hint targets `LOG_DB`.)
-  - `SumUsedQuota` and `GetAllLogs` use it when constructing their
-    GORM `Table(...)` expression. SQLite / PostgreSQL / ClickHouse paths
-    are untouched (those dialects don't understand `USE INDEX` syntax and
-    don't suffer the optimizer mis-estimate). Upstream's
-    `COALESCE(sum(...), 0)` NULL-guards in `SumUsedQuota` are preserved.
-- **Upstream adoption check**:
-  ```bash
-  # If upstream rewrites the stat queries (e.g. adds materialized
-  # aggregates, a separate stats table, or its own hint mechanism) the
-  # local hint may become redundant.
-  git log upstream/main --oneline -- model/log.go \
-  | grep -iE "stat|index|hint|sumused|optimizer"
-  git grep -n "USE INDEX\|FORCE INDEX" upstream/main -- model/log.go
-  ```
-  If upstream switches to a materialized aggregate or a different
-  schema-level fix that obviates the hint, drop the local helper.
+- **Status**: **Removed in the rc.21 merge (2026-07-14).** Production moved its
+  log database to ClickHouse (`LOG_SQL_DSN=clickhouse://…`). The MySQL optimizer
+  mis-estimation this hint worked around does not exist on ClickHouse, and
+  ClickHouse does not accept `USE INDEX` syntax. The helper was already gated to
+  MySQL-only (`UsingLogDatabase(MySQL)`), so it was already a no-op on ClickHouse;
+  with no MySQL log DB in use, the whole mechanism became dead code and was dropped.
+- **What was removed**: the `logsTableExprForUsername(username)` helper in
+  `model/log.go` and its two call sites in `GetAllLogs` / `SumUsedQuota`, which
+  now use plain `LOG_DB.Table("logs")` (matching upstream). Upstream's
+  `COALESCE(sum(...), 0)` NULL-guards in `SumUsedQuota` are preserved.
+- **Orphaned MySQL indexes**: the manually-created `idx_username_created_type`
+  (username, created_at, type) and `idx_user_created` (user_id, created_at) on
+  any legacy MySQL `logs` table are no longer referenced by code. They are
+  harmless if left; drop at leisure. ClickHouse handles these queries via its
+  `(created_at, request_id)` primary key + monthly partitioning — see §4/§8 notes
+  and the ClickHouse log store.
+- **Numbering**: section number **5** is retained (not renumbered); code comments
+  and later sections reference the fork numbering, so §6–§9 keep their numbers.
 
 ### 6. Multi-header fallback for `upstream_request_id`
 

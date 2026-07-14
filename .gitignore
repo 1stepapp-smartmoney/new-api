@@ -43,3 +43,6 @@ web/default/package-lock.json
 .local-tests/
 service/relayconvert/chat_responses_live_local_test.go
 service/openaicompat/chat_responses_live_local_test.go
+
+# 运维迁移文档(不入库,含拓扑)
+MIGRATION-RUNBOOK.md

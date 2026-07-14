@@ -470,9 +470,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 }
 
 func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string, ip string, isStream string) (logs []*Log, total int64, err error) {
-	// fork §5: force the (username, created_at, type) composite index on MySQL
-	// when an admin searches by username. See logsTableExprForUsername.
-	tx := LOG_DB.Table(logsTableExprForUsername(username))
+	tx := LOG_DB.Table("logs")
 	if logType != LogTypeUnknown {
 		tx = tx.Where("logs.type = ?", logType)
 	}
@@ -655,20 +653,6 @@ func parseIsStreamFilter(value string) (bool, bool) {
 	}
 }
 
-// logsTableExprForUsername returns the FROM-clause expression for username-filtered
-// queries (fork §5). On a MySQL log database we force the (username, created_at,
-// type) composite index because the optimizer otherwise mis-estimates a heavy
-// user's rows and falls back to a full scan (~40s vs ~3s). SQLite / PostgreSQL /
-// ClickHouse don't have this problem and don't accept USE INDEX syntax, so the
-// hint is gated on the log DB being MySQL. (upstream removed common.UsingMySQL,
-// so this gates on UsingLogDatabase(MySQL) — strictly correct since it targets LOG_DB.)
-func logsTableExprForUsername(username string) string {
-	if username != "" && common.UsingLogDatabase(common.DatabaseTypeMySQL) {
-		return "logs USE INDEX (idx_username_created_type)"
-	}
-	return "logs"
-}
-
 type Stat struct {
 	Quota int `json:"quota"`
 	Rpm   int `json:"rpm"`
@@ -676,13 +660,10 @@ type Stat struct {
 }
 
 func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
-	// fork §5: USE INDEX hint on MySQL log DB for username-filtered stats;
-	// upstream's COALESCE(...,0) NULL-guards are preserved.
-	tableExpr := logsTableExprForUsername(username)
-	tx := LOG_DB.Table(tableExpr).Select("COALESCE(sum(quota), 0) quota")
+	tx := LOG_DB.Table("logs").Select("COALESCE(sum(quota), 0) quota")
 
 	// 为rpm和tpm创建单独的查询
-	rpmTpmQuery := LOG_DB.Table(tableExpr).Select("count(*) rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) tpm")
+	rpmTpmQuery := LOG_DB.Table("logs").Select("count(*) rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) tpm")
 
 	if tx, err = applyExplicitLogTextFilter(tx, "username", username); err != nil {
 		return stat, err

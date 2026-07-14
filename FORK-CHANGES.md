@@ -361,6 +361,15 @@ official upstream solution** that solves the same problem.
 - **Effect**: Historical rows automatically benefit — every
   `end_reason='client_gone'` row now shows disconnect timing in the
   UI without DB migration.
+- **Upstream churn note (rc.21 merge, 2026-07-14)**: upstream refactored the
+  timing/stream cell into `<TimingMetricsCell>` + `<StreamTpsCell>`
+  (`timing-metrics-cell.tsx`) and moved the red `CircleAlert` stream-error mark
+  *inside* `StreamTpsCell`. The §9 amber `Unplug` client-disconnect indicator
+  was re-grafted as a sibling next to `<StreamTpsCell>` in the is_stream cell
+  (adopting upstream's component instead of the old inline JSX); the inline
+  `CircleAlert` was dropped since `StreamTpsCell` now renders it. Coexistence
+  with the error mark still holds. Separately, §5 (MySQL `USE INDEX`) was retired
+  this merge — logs now live in ClickHouse (see §5).
 - **Upstream adoption check**:
   ```bash
   # Skip this entry if upstream adopts both the backend annotation

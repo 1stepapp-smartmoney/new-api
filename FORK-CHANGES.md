@@ -19,6 +19,20 @@ official upstream solution** that solves the same problem.
 
 > **Recent upstream merges:**
 >
+> - **2026-08-05 → upstream rc.23** (69 commits). **Breaking upstream change:
+>   the frontend was restructured** — `web/classic/` was deleted outright and
+>   the default frontend was promoted from `web/default/` to `web/` (bun
+>   workspace collapsed to a single package). Adoption check: **none of the
+>   remaining fork entries were adopted upstream — all retained**; git's rename
+>   detection carried §1/§3/§4/§7/§9 into `web/src/` automatically. **§2 was
+>   retired** (its host, the classic UI, no longer exists upstream and
+>   production had already stopped serving it). Other churn: §9's stream-status
+>   section adopted upstream's `84834eee8 feat(logs): expose stream status to
+>   log owners` (dropped the `props.isAdmin` gate) while keeping the fork's
+>   `client_gone` display condition and disconnect detail rows; `.dockerignore`
+>   updated for the single-package layout. All `web/default/` paths in this
+>   file were rewritten to `web/`.
+>
 > - **2026-06-24 → upstream rc.14** (86 commits: ClickHouse log DB, dashboard
 >   traffic-flow sankey, compact `<Dialog>` wrapper, log-deletion refactor,
 >   audit auth-method tracking). Adoption check: **none of the 9 fork entries
@@ -49,9 +63,9 @@ official upstream solution** that solves the same problem.
   - Classic UI: `web/classic/src/components/dashboard/modals/SearchModal.jsx`,
     `web/classic/src/hooks/dashboard/useDashboardData.js`,
     `web/classic/src/components/dashboard/index.jsx`.
-  - Default UI: `web/default/src/features/dashboard/{api.ts,types.ts,constants.ts}`,
-    `web/default/src/features/dashboard/lib/filters.ts`,
-    `web/default/src/features/dashboard/components/models/models-filter-dialog.tsx`.
+  - Default UI: `web/src/features/dashboard/{api.ts,types.ts,constants.ts}`,
+    `web/src/features/dashboard/lib/filters.ts`,
+    `web/src/features/dashboard/components/models/models-filter-dialog.tsx`.
   - i18n: keys `"条件筛选"` / `"模型"` / `"全部模型"` (classic);
     `"Filter by model"` / `"Data Filters"` (default).
 - **Upstream adoption check**:
@@ -59,22 +73,22 @@ official upstream solution** that solves the same problem.
   # If any of these show output, upstream may have added equivalent support.
   git log upstream/main -- model/usedata.go controller/usedata.go \
     | grep -iE "model_name|GetDistinctModelNames"
-  git grep -n "model_name" upstream/main -- 'web/default/src/features/dashboard/*'
+  git grep -n "model_name" upstream/main -- 'web/src/features/dashboard/*'
   ```
 
-### 2. Classic UI dashboard — "条件筛选" labeled filter button
+### 2. ~~Classic UI dashboard — "条件筛选" labeled filter button~~ (RETIRED — rc.23)
 
-- **Why**: Classic UI header showed only a search icon, users did not realize
-  the data filter dialog existed.
-- **Local commit**: `733c2a86 add ui text`
-- **Touched files**: `web/classic/src/components/dashboard/DashboardHeader.jsx`
-  (text + button styling); 7 classic i18n locale files
-  (`web/classic/src/i18n/locales/{en,zh-CN,zh-TW,fr,ja,ru,vi}.json`).
-- **Upstream adoption check**:
-  ```bash
-  git grep -n "条件筛选\|Filter Dashboard\|search-modal" upstream/main \
-    -- 'web/classic/src/components/dashboard/DashboardHeader.jsx'
-  ```
+- **Status**: **Removed in the rc.23 merge (2026-08-05).** Upstream deleted the
+  entire classic frontend and promoted the default frontend from `web/default/`
+  to `web/` (bun workspace collapsed from multi-package to a single package).
+  With `web/classic/` gone upstream, this customization has no host file left;
+  production had already stopped serving the classic UI, so it was dropped
+  rather than maintained as a fork-only frontend.
+- **What was removed**: `web/classic/` in its entirety (the 12 conflicted files
+  were resolved by accepting upstream's deletion), including
+  `DashboardHeader.jsx` and the 7 classic i18n locale files.
+- **Numbering**: section number **2** is retained (not renumbered), consistent
+  with [[§5]]; code comments elsewhere reference the fork numbering.
 
 ### 3. Default-UI charts — distinct colors when series > theme palette
 
@@ -85,7 +99,7 @@ official upstream solution** that solves the same problem.
   10+ top users the four model charts (distribution bar/area, pie, trend,
   ranking) and both user charts become unreadable.
 - **Local commit**: `fd70fd71 fix(default-dashboard): avoid duplicate model/user colors when series > palette`
-- **Touched files**: `web/default/src/features/dashboard/lib/charts.ts` only.
+- **Touched files**: `web/src/features/dashboard/lib/charts.ts` only.
 - **Fix approach**: new helpers `generateDistinctColors()` (golden-angle hue
   rotation + 4 saturation/lightness bands) and `expandPalette()`. The first N
   slots keep the brand theme colors (so the ≤5-series case is unchanged);
@@ -96,8 +110,8 @@ official upstream solution** that solves the same problem.
 - **Upstream adoption check**:
   ```bash
   # If upstream changes the palette-extension logic, compare diff.
-  git log upstream/main --oneline -- web/default/src/features/dashboard/lib/charts.ts
-  git show upstream/main:web/default/src/features/dashboard/lib/charts.ts \
+  git log upstream/main --oneline -- web/src/features/dashboard/lib/charts.ts
+  git show upstream/main:web/src/features/dashboard/lib/charts.ts \
     | grep -nE "index % .*\.length|generateDistinct|expandPalette|HSL|getDashboardChartColors"
   ```
   If upstream introduces an equivalent palette generator (regardless of
@@ -125,9 +139,9 @@ official upstream solution** that solves the same problem.
     `/api/log/` and `/api/log/self`; strips `Log.Ip` from the response for
     non-root callers and unconditionally for the token-auth
     `GetLogByKey` endpoint).
-  - Default UI: `web/default/src/hooks/use-root.ts` (new `useIsRoot`
+  - Default UI: `web/src/hooks/use-root.ts` (new `useIsRoot`
     hook, mirror of `useIsAdmin`),
-    `web/default/src/features/usage-logs/types.ts` (`CommonLogFilters.ip`),
+    `web/src/features/usage-logs/types.ts` (`CommonLogFilters.ip`),
     `…/lib/filter.ts`, `…/lib/utils.ts`, `…/lib/columns.ts`
     (column factory now takes `isRoot`),
     `…/components/common-logs-filter-bar.tsx` (IP input wrapped in
@@ -139,7 +153,7 @@ official upstream solution** that solves the same problem.
     `…/components/dialogs/details-dialog.tsx`
     (`showAdminIp` simplified to `!!log.ip && isRoot`),
     `…/components/usage-logs-table.tsx` (call `useIsRoot()` and pass
-    through), `web/default/src/routes/_authenticated/usage-logs/$section.tsx`
+    through), `web/src/routes/_authenticated/usage-logs/$section.tsx`
     (`ip` in search-params zod schema).
   - i18n: new key `"Filter by IP"` across all 6 default-UI locale files.
 - **Behaviour**:
@@ -170,7 +184,7 @@ official upstream solution** that solves the same problem.
   | grep -iE "record_ip_log|RecordIpLog|FORCE_RECORD_IP|filter.*ip|ip.*filter"
   git grep -n '"ip"' upstream/main -- controller/log.go model/log.go
   git grep -n "filter.*ip\\|placeholder.*[Ii][Pp]" upstream/main \
-    -- 'web/default/src/features/usage-logs/*'
+    -- 'web/src/features/usage-logs/*'
   ```
   If upstream lands an equivalent operator toggle and an `ip` query
   parameter, drop the local diff and switch to the upstream knob.
@@ -237,7 +251,7 @@ official upstream solution** that solves the same problem.
     `controller/log.go` reads `?is_stream=` from the query string.
     Accepted values: `""`/`"all"` (no filter), `"stream"`/`"1"`,
     `"non_stream"`/`"0"`.
-  - Default UI: `web/default/src/features/usage-logs/types.ts` adds
+  - Default UI: `web/src/features/usage-logs/types.ts` adds
     `isStream` to `CommonLogFilters`; `lib/filter.ts` and `lib/utils.ts`
     propagate the value; `routes/.../$section.tsx` widens the search
     schema; `components/common-logs-filter-bar.tsx` renders a new
@@ -249,7 +263,7 @@ official upstream solution** that solves the same problem.
   ```bash
   git grep -n "is_stream" upstream/main -- model/log.go controller/log.go
   git grep -n "isStream" upstream/main -- \
-    'web/default/src/features/usage-logs/*'
+    'web/src/features/usage-logs/*'
   ```
 
 ### 8. Annotate logs with client disconnect timing (stream + non-stream)
@@ -339,7 +353,7 @@ official upstream solution** that solves the same problem.
   status.
 - **Local commit**: `feat(ui): surface client_gone / client_disconnected
   in log details` (5b4a3fbb5).
-- **Touched files** (all under `web/default/src/features/usage-logs/`):
+- **Touched files** (all under `web/src/features/usage-logs/`):
   - `types.ts`: extend `LogOtherData.stream_status` with
     `client_gone`, `client_gone_at_chunks`, `client_gone_at_ms`,
     `client_gone_error`; add top-level `client_disconnected` and
@@ -376,7 +390,7 @@ official upstream solution** that solves the same problem.
   # (§8) and a frontend that renders client_gone / client_disconnected
   # independently of stream_status.status.
   git grep -n "client_gone\|client_disconnected" upstream/main \
-    -- 'web/default/**'
+    -- 'web/src/**'
   ```
 
 #### ⚠ Operational trap — DO NOT delete `idx_logs_username`

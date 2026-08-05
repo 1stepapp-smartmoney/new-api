@@ -29,12 +29,9 @@ tiktoken_cache
 id_rsa*
 
 # ===== 前端构建产物与依赖（镜像内会重新产生） =====
-# upstream 已把 web/ 拆为 default + classic，分别有自己的 node_modules / dist
+# upstream rc.23 把前端提升回 web/ 单包（default/classic 已移除）
 /web/node_modules
-/web/default/node_modules
-/web/default/dist
-/web/classic/node_modules
-/web/classic/dist
+/web/dist
 web/.vite
 web/.eslintcache
 electron/node_modules

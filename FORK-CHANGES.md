@@ -444,22 +444,26 @@ deployed**. They should remain even if upstream adds similar tooling.
   `APP_VERSION` and writes the version into the `VERSION` file before
   invoking the build. `APP_VERSION` should be bumped to the latest upstream
   release tag on every upstream merge.
-- `scripts/redeploy.sh` — rolls the published image out to every production
-  instance: Tokyo (`~/nexapi-docker`, container `new-api`, :3000) and the two
-  us-west-2 sites (`~/nexapi-a` :3000 and `~/nexapi-b` :3001). Per host it runs
-  `docker compose pull` + `up -d`, then waits up to 240 s for the container to
-  report `healthy` (AutoMigrate can be slow on large tables) and finally probes
-  `/api/status`; any failure makes the script exit non-zero. Takes an optional
-  target (`all` / `tokyo` / `usw2`); host addresses can be overridden with the
-  `TOKYO_HOST` / `USW2_HOST` env vars. Normal release flow is
-  `scripts/build.sh` (build + push) followed by this script.
+- `scripts/redeploy.sh` — one-command release: pulls the latest code on the
+  build host and runs `scripts/build.sh` there (build + push to Docker Hub),
+  then rolls the new image out to every production instance — Tokyo
+  (`~/nexapi-docker`, container `new-api`, :3000) and the two us-west-2 sites
+  (`~/nexapi-a` :3000, `~/nexapi-b` :3001). Per host it runs `docker compose
+  pull` + `up -d`, waits up to 240 s for `healthy` (AutoMigrate can be slow on
+  large tables), then probes `/api/status`; any failure exits non-zero, and a
+  failed build aborts the rollout. Targets: `all` (default) / `build` / `deploy`
+  / `tokyo` / `usw2`. Host and build-dir addresses can be overridden with
+  `BUILD_HOST` / `BUILD_DIR` / `TOKYO_HOST` / `USW2_HOST`. See `deploy/README.md`
+  for the site table and the per-site compose deltas.
 - `deploy/docker-compose.prod.yml` — tracked copy of the **production**
-  compose file used on the RDS-backed deployment (nexapi.org). The root
-  `docker-compose.yml` is the upstream demo template with bundled postgres
-  + redis containers and is NOT what production uses. Production keeps its
-  own copy at `~/new-api-docker/docker-compose.yml` on the host; sync it
-  with `deploy/docker-compose.prod.yml` whenever either changes. See
-  `deploy/README.md` for the workflow.
+  compose file (nexapi.org, AWS RDS MySQL + ClickHouse logs + Valkey cache).
+  The root `docker-compose.yml` is the upstream demo template with bundled
+  postgres + redis containers and is NOT what production uses. Each host keeps
+  its own copy (Tokyo `~/nexapi-docker`, us-west-2 `~/nexapi-a` / `~/nexapi-b`);
+  the tracked file matches Tokyo verbatim, and the us-west-2 sites differ only
+  in `container_name`, published port and `mem_limit`. Sync whenever either
+  side changes. See `deploy/README.md` for the site table, the drift-check
+  command and the `.env` key reference.
 
 ---
 

@@ -1,31 +1,67 @@
 #!/usr/bin/env bash
 #
-# 在东京 + us-west-2 两台机器上重新 pull 镜像并滚动拉起所有 new-api 实例。
+# 一条龙发布：构建机拉代码 → 编译并推送镜像 → 东京 + us-west-2 各站拉取新镜像并重建容器。
 #
 # 用法：
-#   ./scripts/redeploy.sh            全部三个实例
+#   ./scripts/redeploy.sh            构建 + 全部三个实例
+#   ./scripts/redeploy.sh build      仅在构建机上编译并推送镜像
+#   ./scripts/redeploy.sh deploy     跳过构建，仅让三个实例重拉现有 latest
 #   ./scripts/redeploy.sh tokyo      仅东京
 #   ./scripts/redeploy.sh usw2       仅美西两站
 #
-# 前置条件：本机 ssh 能免密登录目标主机，且目标主机上的 sudo 无需交互输入密码。
-# 通常流程：先 ./scripts/build.sh 构建并推送镜像，再执行本脚本让各站拉取新镜像。
+# 前置条件：本机 ssh 能免密登录构建机与目标主机，各机 sudo 无需交互输入密码，
+# 且构建机已 docker login 过 Docker Hub（build.sh 用 sudo -E 继承该登录态）。
 #
 # 主机地址可用环境变量覆盖，便于换机或临时指向别的环境：
 #   TOKYO_HOST=ubuntu@1.2.3.4 ./scripts/redeploy.sh tokyo
 set -uo pipefail
 
+BUILD_HOST="${BUILD_HOST:-wjh@80.240.25.4}"
+BUILD_DIR="${BUILD_DIR:-~/new-api}"
 TOKYO="${TOKYO_HOST:-ubuntu@54.64.192.229}"
 USW2="${USW2_HOST:-ubuntu@52.41.195.28}"
 TARGET="${1:-all}"
 FAIL=0
 
+DO_BUILD=false
+DO_TOKYO=false
+DO_USW2=false
 case "$TARGET" in
-  all|tokyo|usw2) ;;
+  all)    DO_BUILD=true; DO_TOKYO=true; DO_USW2=true ;;
+  build)  DO_BUILD=true ;;
+  deploy) DO_TOKYO=true; DO_USW2=true ;;
+  tokyo)  DO_TOKYO=true ;;
+  usw2)   DO_USW2=true ;;
   *)
-    echo "ERROR: 未知目标 '$TARGET'（可选：all / tokyo / usw2）" >&2
+    echo "ERROR: 未知目标 '$TARGET'（可选：all / build / deploy / tokyo / usw2）" >&2
     exit 2
     ;;
 esac
+
+# 在构建机上拉最新代码并编译推送镜像。build.sh 会把 APP_VERSION 写进 VERSION 文件，
+# 所以每次构建后工作区都是脏的；先丢弃这一处改动，否则 git pull 会因本地修改被覆盖而拒绝。
+build_image() {
+  echo "──────── 构建镜像  ($BUILD_HOST:$BUILD_DIR) ────────"
+  local log
+  log=$(mktemp)
+  ssh -o ConnectTimeout=10 "$BUILD_HOST" "set -e
+    cd $BUILD_DIR
+    git checkout -- VERSION 2>/dev/null || true
+    git pull --ff-only
+    echo \">>> HEAD: \$(git rev-parse --short HEAD) \$(git log -1 --pretty=%s)\"
+    sudo -E scripts/build.sh
+  " 2>&1 | tee "$log"
+  local rc=${PIPESTATUS[0]}
+  if [ "$rc" != 0 ]; then
+    echo "  ✗ 构建失败，未推送镜像，终止发布"
+    rm -f "$log"
+    return 1
+  fi
+  local image
+  image=$(sed -n 's/^ *Image *: *//p' "$log" | tail -1)
+  rm -f "$log"
+  echo "  ✓ 构建并推送完成${image:+：$image}"
+}
 
 # host  目录  容器名  本地探测端口
 deploy() {
@@ -59,11 +95,18 @@ deploy() {
   fi
 }
 
-[ "$TARGET" = all ] || [ "$TARGET" = tokyo ] && deploy "$TOKYO" '~/nexapi-docker' new-api 3000
-[ "$TARGET" = all ] || [ "$TARGET" = usw2 ] && {
+if [ "$DO_BUILD" = true ]; then
+  build_image || exit 1
+fi
+
+if [ "$DO_TOKYO" = true ]; then
+  deploy "$TOKYO" '~/nexapi-docker' new-api 3000
+fi
+
+if [ "$DO_USW2" = true ]; then
   deploy "$USW2" '~/nexapi-a' new-api-a 3000
   deploy "$USW2" '~/nexapi-b' new-api-b 3001
-}
+fi
 
 echo
 [ "$FAIL" = 0 ] && echo "全部实例部署完成且健康" || { echo "有实例未通过检查,见上方输出"; exit 1; }

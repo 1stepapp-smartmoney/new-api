@@ -1,23 +1,25 @@
-# Production docker-compose for the RDS-backed deployment (e.g. nexapi.org).
+# Canonical production docker-compose (AWS-backed deployment, nexapi.org).
 #
-# This file connects to managed MySQL (Aliyun RDS) and managed Redis instead
-# of running them as sidecar containers. Secrets (SQL_DSN, REDIS_CONN_STRING,
-# SESSION_SECRET, CRYPTO_SECRET, etc.) are loaded from `.env`, which is NOT
-# checked in to git.
+# Backing services are all managed/external, never sidecar containers:
+#   SQL_DSN           -> AWS RDS MySQL 8.0 (ap-northeast-1)
+#   LOG_SQL_DSN       -> ClickHouse (request logs live there, NOT in the main DB)
+#   REDIS_CONN_STRING -> ElastiCache for Valkey (TLS, so rediss://)
+# Those and the other secrets live in `.env`, which is NOT checked in to git.
 #
-# Sync this file with the live `~/new-api-docker/docker-compose.yml` on the
-# server. To verify a server matches the tracked version:
+# This file matches the Tokyo site verbatim. The two us-west-2 sites run the
+# same image with three per-site deltas (container_name, published port,
+# mem_limit) — see deploy/README.md for the table and the drift-check command.
 #
-#   diff <(sudo cat ~/new-api-docker/docker-compose.yml) deploy/docker-compose.prod.yml
+# Deploys are driven from a workstation by `scripts/redeploy.sh`, which builds,
+# pushes, pulls and health-checks every site. Manual equivalent, per host:
 #
-# To deploy a new image:
+#   cd ~/nexapi-docker && sudo docker compose pull && sudo docker compose up -d
 #
-#   cd ~/new-api-docker
-#   sudo docker compose pull
-#   sudo docker compose up -d
+# NOTE: `up -d` (not `restart`) is required for `.env` or compose changes to
+# take effect — `restart` reuses the old container definition.
 #
-# (Used by https://nexapi.org. The root `docker-compose.yml` is the upstream
-#  demo template with bundled postgres + redis; do not use it for prod.)
+# (The root `docker-compose.yml` is the upstream demo template with bundled
+#  postgres + redis; do not use it for prod.)
 
 services:
   new-api:
@@ -26,6 +28,13 @@ services:
     container_name: new-api
     restart: always
     command: --log-dir /app/logs
+    # Hard ceiling so a runaway heap kills only this container (restart: always
+    # brings it back) instead of driving the whole host into kernel OOM. Keep
+    # GOMEMLIMIT in `.env` several GB BELOW this value, so Go's GC turns
+    # aggressive and settles the heap before Docker ever has to intervene.
+    # Per-site value: Tokyo (62 GiB box, single site) uses 40g; each us-west-2
+    # site uses 24g because two sites share one 64 GiB box.
+    mem_limit: 40g
     env_file:
       - .env
     ports:

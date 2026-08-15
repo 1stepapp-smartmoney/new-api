@@ -19,6 +19,16 @@ official upstream solution** that solves the same problem.
 
 > **Recent upstream merges:**
 >
+> - **2026-08-15 → upstream rc.24** (37 commits). Adoption check: **none of the
+>   active fork entries were adopted upstream — all retained.** The merge itself
+>   was conflict-free. One upstream defect had to be fixed locally: upstream
+>   bumped `dompurify` 3.4.11 → 3.4.13 in `web/package.json` **without
+>   regenerating `web/bun.lock`** (their lockfile still pins 3.4.11), which
+>   breaks `bun install --frozen-lockfile` — used by `Dockerfile:5` and every
+>   CI workflow, so the production image build fails. Fixed by regenerating
+>   `web/bun.lock`. Re-check on the next merge: if upstream ships its own
+>   lockfile fix, drop ours in favour of theirs.
+>
 > - **2026-08-05 → upstream rc.23** (69 commits). **Breaking upstream change:
 >   the frontend was restructured** — `web/classic/` was deleted outright and
 >   the default frontend was promoted from `web/default/` to `web/` (bun

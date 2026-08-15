@@ -444,6 +444,15 @@ deployed**. They should remain even if upstream adds similar tooling.
   `APP_VERSION` and writes the version into the `VERSION` file before
   invoking the build. `APP_VERSION` should be bumped to the latest upstream
   release tag on every upstream merge.
+- `scripts/redeploy.sh` — rolls the published image out to every production
+  instance: Tokyo (`~/nexapi-docker`, container `new-api`, :3000) and the two
+  us-west-2 sites (`~/nexapi-a` :3000 and `~/nexapi-b` :3001). Per host it runs
+  `docker compose pull` + `up -d`, then waits up to 240 s for the container to
+  report `healthy` (AutoMigrate can be slow on large tables) and finally probes
+  `/api/status`; any failure makes the script exit non-zero. Takes an optional
+  target (`all` / `tokyo` / `usw2`); host addresses can be overridden with the
+  `TOKYO_HOST` / `USW2_HOST` env vars. Normal release flow is
+  `scripts/build.sh` (build + push) followed by this script.
 - `deploy/docker-compose.prod.yml` — tracked copy of the **production**
   compose file used on the RDS-backed deployment (nexapi.org). The root
   `docker-compose.yml` is the upstream demo template with bundled postgres

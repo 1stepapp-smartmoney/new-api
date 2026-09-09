@@ -21,6 +21,16 @@ func SetApiRouter(router *gin.Engine) {
 	apiRouter.Use(middleware.GlobalAPIRateLimit())
 	anonymousRequestBodyLimit := middleware.AnonymousRequestBodyLimit()
 	{
+		// Supplier reconciliation API (fork §10). Authenticated by the spec's
+		// x-api-key header and throttled in its own bucket, independent of the
+		// keys that call the AI endpoints.
+		reconciliationRouter := apiRouter.Group("")
+		reconciliationRouter.Use(middleware.ReconciliationAuth(), middleware.ReconciliationRateLimit(), middleware.DisableCache())
+		{
+			reconciliationRouter.POST("/v3/consumes", controller.GetReconciliationConsumes)
+			reconciliationRouter.GET("/v1/balance", controller.GetReconciliationBalance)
+		}
+
 		apiRouter.GET("/setup", controller.GetSetup)
 		apiRouter.POST("/setup", anonymousRequestBodyLimit, controller.PostSetup)
 		apiRouter.GET("/status", controller.GetStatus)

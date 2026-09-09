@@ -452,6 +452,63 @@ this scenario survivable: if the index ever does need to rebuild,
 the container won't be reported unhealthy and traffic-routing /
 orchestrator behaviour stays normal during the migration.
 
+### 10. Supplier reconciliation API (`/api/v3/consumes`, `/api/v1/balance`)
+
+- **Why**: A customer platform reconciles the billing it recorded for its own
+  users against ours, per "对账业务供应商渠道接口规范 V1.0". That spec puts this
+  gateway on the **supplier** side: it must expose a paginated consume-detail
+  feed and a balance endpoint, authenticated by a dedicated key, and every
+  billed row must carry a correlation id the caller can match against its own
+  ledger.
+- **Touched files**:
+  - `common/constants.go` / `common/init.go`: `PlatformRequestIdKey` context key,
+    the configurable `PLATFORM_REQUEST_ID_HEADER` (default `X-Platform-Request-Id`),
+    `MaxPlatformRequestIdLength`, and an independent
+    `RECONCILIATION_RATE_LIMIT` / `_DURATION` bucket.
+  - `middleware/request-id.go`: captures and sanitizes the caller-supplied
+    correlation id (trimmed, control characters stripped, truncated by rune to
+    the column width). Empty header name disables capture.
+  - `model/log.go`: new indexed `platform_request_id` column, written by both
+    `RecordConsumeLog` and `RecordErrorLog` so a failed call is reconcilable as
+    "no charge" too.
+  - `model/main.go`: the column in the ClickHouse `CREATE TABLE` plus an
+    idempotent `ALTER TABLE logs ADD COLUMN IF NOT EXISTS` — `CREATE TABLE IF
+    NOT EXISTS` never alters a table that an earlier deployment already created.
+  - `model/reconciliation.go`, `dto/reconciliation.go`,
+    `controller/reconciliation.go`, `middleware/reconciliation.go`,
+    `router/api-router.go`: the endpoints themselves.
+- **Design notes**:
+  - **Correlation id**: three ids now coexist and must not be conflated —
+    `request_id` (this gateway's), `upstream_request_id` (the provider's, §6),
+    and `platform_request_id` (the caller's). The API returns the caller's id
+    when present and falls back to ours, which is exactly the primary/secondary
+    anchor the spec defines.
+  - **Cursor**: `beginCursor` is an **offset**, not a row id — the spec itself
+    calls it 起始偏移. Row ids are unusable here because the ClickHouse log
+    database synthesizes them at query time. Ordering is
+    `created_at asc, request_id asc`, which matches the ClickHouse table's
+    `ORDER BY (created_at, request_id)` so paging stays index-ordered.
+  - **usageDetail is derived, not passed through.** The gateway normalizes
+    provider usage into its own counters instead of storing the vendor payload,
+    and an upstream that is itself a new-api instance never returns the original
+    structure, so a byte-for-byte passthrough is not obtainable. The endpoint
+    returns a normalized OpenAI-shaped breakdown rebuilt from the stored token
+    counts and cache/text/audio fields.
+  - **Money** is emitted as `json.Number` computed with `decimal`, so amounts
+    stay exact JSON numbers with no float error and no scientific notation.
+  - **Reconciliation key uses existing controls, no new permission flag**: give
+    the token unlimited quota (so it is never treated as exhausted) and enable
+    the model allow-list while leaving it **empty**, which makes
+    `tokenModelLimitAllows` reject every model with 403. The endpoints read data
+    and never consume quota.
+- **Upstream adoption check**:
+  ```bash
+  # If upstream ships its own reconciliation/billing-export API, compare before
+  # keeping this one.
+  git grep -n "consumes\|reconciliation" upstream/main -- router/ controller/
+  git grep -n "platform_request_id" upstream/main
+  ```
+
 ---
 
 ## Tooling / packaging customizations (kept regardless of upstream)

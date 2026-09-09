@@ -117,6 +117,7 @@ func InitEnv() {
 
 	// Initialize string variables with GetEnvOrDefaultString
 	GeminiSafetySetting = GetEnvOrDefaultString("GEMINI_SAFETY_SETTING", "BLOCK_NONE")
+	PlatformRequestIdHeader = GetEnvOrDefaultString("PLATFORM_REQUEST_ID_HEADER", PlatformRequestIdHeader)
 	CohereSafetySetting = GetEnvOrDefaultString("COHERE_SAFETY_SETTING", "NONE")
 
 	// Initialize rate limit variables
@@ -131,6 +132,8 @@ func InitEnv() {
 	CriticalRateLimitEnable = GetEnvOrDefaultBool("CRITICAL_RATE_LIMIT_ENABLE", true)
 	CriticalRateLimitNum = GetEnvOrDefault("CRITICAL_RATE_LIMIT", 20)
 	CriticalRateLimitDuration = int64(GetEnvOrDefault("CRITICAL_RATE_LIMIT_DURATION", 20*60))
+	ReconciliationRateLimitNum = GetEnvOrDefault("RECONCILIATION_RATE_LIMIT", 120)
+	ReconciliationRateLimitDuration = int64(GetEnvOrDefault("RECONCILIATION_RATE_LIMIT_DURATION", 60))
 
 	SearchRateLimitEnable = GetEnvOrDefaultBool("SEARCH_RATE_LIMIT_ENABLE", true)
 	SearchRateLimitNum = GetEnvOrDefault("SEARCH_RATE_LIMIT", 10)

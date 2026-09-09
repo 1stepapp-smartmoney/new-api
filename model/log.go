@@ -77,6 +77,10 @@ type Log struct {
 	Ip                string `json:"ip" gorm:"index;default:''"`
 	RequestId         string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
 	UpstreamRequestId string `json:"upstream_request_id,omitempty" gorm:"type:varchar(128);index:idx_logs_upstream_request_id;default:''"`
+	// PlatformRequestId is the caller-supplied reconciliation correlation id
+	// (fork §10). Reconciliation matches billing rows on it, so it is indexed
+	// and kept separate from RequestId (ours) and UpstreamRequestId (provider's).
+	PlatformRequestId string `json:"platform_request_id,omitempty" gorm:"type:varchar(128);index:idx_logs_platform_request_id;default:''"`
 	Other             string `json:"other"`
 }
 
@@ -315,6 +319,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 		}(),
 		RequestId:         requestId,
 		UpstreamRequestId: upstreamRequestId,
+		PlatformRequestId: c.GetString(common.PlatformRequestIdKey),
 		Other:             otherStr,
 	}
 	err := createLog(log)
@@ -381,6 +386,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		}(),
 		RequestId:         requestId,
 		UpstreamRequestId: upstreamRequestId,
+		PlatformRequestId: c.GetString(common.PlatformRequestIdKey),
 		Other:             otherStr,
 	}
 	err := createLog(log)
@@ -634,9 +640,11 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 // parseIsStreamFilter interprets the API-level `is_stream` query value as a
 // boolean filter (fork §7). Second return false = no filter (all rows). Accepts
 // a liberal input set so the frontend dropdown and ad-hoc calls both work:
-//   "" / "all" / "any" / "*"                       → no filter
-//   "1" / "true"  / "stream"     / "yes"           → is_stream = true
-//   "0" / "false" / "non_stream" / "no"            → is_stream = false
+//
+//	"" / "all" / "any" / "*"                       → no filter
+//	"1" / "true"  / "stream"     / "yes"           → is_stream = true
+//	"0" / "false" / "non_stream" / "no"            → is_stream = false
+//
 // Unknown values are treated as no filter rather than rejected.
 func parseIsStreamFilter(value string) (bool, bool) {
 	switch strings.ToLower(strings.TrimSpace(value)) {

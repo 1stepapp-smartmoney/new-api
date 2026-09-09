@@ -189,6 +189,13 @@ func UserCriticalRateLimit(scope string) func(c *gin.Context) {
 	)
 }
 
+// ReconciliationRateLimit throttles the supplier reconciliation endpoints
+// (fork §10) in a bucket of their own. The spec requires the reconciliation
+// key's limit to be independent of the keys that call the AI endpoints.
+func ReconciliationRateLimit() func(c *gin.Context) {
+	return rateLimitFactory(common.ReconciliationRateLimitNum, common.ReconciliationRateLimitDuration, "RC")
+}
+
 func DownloadRateLimit() func(c *gin.Context) {
 	return rateLimitFactory(common.DownloadRateLimitNum, common.DownloadRateLimitDuration, "DW")
 }

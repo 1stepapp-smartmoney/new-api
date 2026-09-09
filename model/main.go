@@ -40,6 +40,14 @@ func jsonScanBytes(value any) []byte {
 	}
 }
 
+// InitColumnQuoting re-derives the dialect-specific identifier quoting used by
+// the raw SQL fragments in this package. InitDB and InitLogDB call it as part of
+// startup; tests that install a database handle directly must call it too,
+// otherwise those fragments render with an empty column name.
+func InitColumnQuoting() {
+	initCol()
+}
+
 func initCol() {
 	// init common column names
 	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
@@ -407,6 +415,12 @@ func migrateClickHouseLogDB() error {
 	if err := LOG_DB.Exec(clickHouseLogCreateTableSQL(ttlDays)).Error; err != nil {
 		return err
 	}
+	// CREATE TABLE IF NOT EXISTS never alters an existing table, so columns
+	// added after a deployment first created `logs` need an explicit ALTER.
+	// ClickHouse makes ADD COLUMN IF NOT EXISTS idempotent and metadata-only.
+	if err := LOG_DB.Exec("ALTER TABLE logs ADD COLUMN IF NOT EXISTS platform_request_id String DEFAULT ''").Error; err != nil {
+		return err
+	}
 	return syncClickHouseLogTTL(ttlDays)
 }
 
@@ -455,6 +469,7 @@ CREATE TABLE IF NOT EXISTS logs (
 	ip String DEFAULT '',
 	request_id String DEFAULT '',
 	upstream_request_id String DEFAULT '',
+	platform_request_id String DEFAULT '',
 	other String DEFAULT ''
 )
 ENGINE = MergeTree()

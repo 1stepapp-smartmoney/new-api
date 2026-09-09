@@ -39,6 +39,17 @@ func ReconciliationAuth() func(c *gin.Context) {
 			abortReconciliation(c, http.StatusUnauthorized, dto.ReconCodeUnauthorized, "invalid or expired x-api-key")
 			return
 		}
+		// Only a key that can call no model at all may read the billing ledger.
+		// "Model allow-list enabled, list empty" is precisely the configuration
+		// that makes a key reconciliation-only, so it doubles as the marker:
+		// an ordinary relay key is rejected here, and a leaked one therefore
+		// cannot enumerate the account's consumption history or balance.
+		if !token.ModelLimitsEnabled || len(token.GetModelLimitsMap()) > 0 {
+			abortReconciliation(c, http.StatusForbidden, dto.ReconCodeForbidden,
+				"this key is not a reconciliation key: enable the model allow-list and leave it empty")
+			return
+		}
+
 		userCache, err := model.GetUserCache(token.UserId)
 		if err != nil || userCache.Status != common.UserStatusEnabled {
 			abortReconciliation(c, http.StatusForbidden, dto.ReconCodeForbidden, "the account bound to this key is unavailable")

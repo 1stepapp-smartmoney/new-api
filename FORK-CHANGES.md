@@ -518,6 +518,13 @@ orchestrator behaviour stays normal during the migration.
     the model allow-list while leaving it **empty**, which makes
     `tokenModelLimitAllows` reject every model with 403. The endpoints read data
     and never consume quota.
+  - **That same configuration is the marker.** The middleware admits a key only
+    when the model allow-list is enabled *and* empty — the one configuration
+    that can call no model, so it can only be a reconciliation key. This closes
+    the reverse direction the spec leaves implicit: an ordinary relay key is
+    rejected with 1002, so a leaked AI key cannot enumerate the account's
+    consumption ledger or balance. Queries are additionally scoped to the
+    token's own user, so a key never sees another account's rows.
 - **Upstream adoption check**:
   ```bash
   # If upstream ships its own reconciliation/billing-export API, compare before

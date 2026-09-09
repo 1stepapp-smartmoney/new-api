@@ -159,6 +159,10 @@ func TestReconciliationAPI(t *testing.T) {
 					assert.Equal(t, dto.ReconCodeUnauthorized, envelope.Code)
 					assert.NotEmpty(t, envelope.RequestId, "every response carries a request id for support")
 				}
+				// A relay key is a valid credential but must not be able to read
+				// the billing ledger: only a key that can call no model may.
+				_, envelope := post(t, "otherkey0000000000000000000000000", `{"beginTime":1,"endTime":2}`)
+				assert.Equal(t, dto.ReconCodeForbidden, envelope.Code, "an ordinary AI key cannot reconcile")
 			})
 
 			t.Run("window guards", func(t *testing.T) {

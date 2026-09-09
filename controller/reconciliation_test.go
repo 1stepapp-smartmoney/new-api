@@ -3,6 +3,7 @@ package controller
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -113,13 +114,15 @@ func TestReconciliationAPI(t *testing.T) {
 			assert.Empty(t, reconToken.GetModelLimitsMap())
 
 			const base int64 = 1_780_000_000
+			// Anthropic semantics: prompt_tokens excludes both cache reads and
+			// cache writes, exactly as the Claude adaptor stores them.
 			rows := []model.Log{
-				{UserId: user.Id, CreatedAt: base + 1, Type: model.LogTypeConsume, ModelName: "claude-opus-4-7", TokenId: reconToken.Id, Quota: 500, PromptTokens: 100, CompletionTokens: 20, IsStream: true, RequestId: "gw-1", PlatformRequestId: "platform-1", UpstreamRequestId: "up-1", Other: `{"cache_tokens":7,"cache_creation_tokens":3}`},
-				{UserId: user.Id, CreatedAt: base + 2, Type: model.LogTypeConsume, ModelName: "gpt-5", TokenId: otherToken.Id, Quota: 250, PromptTokens: 10, CompletionTokens: 5, RequestId: "gw-2", Other: `{"model_price":0.02}`},
-				{UserId: user.Id, CreatedAt: base + 3, Type: model.LogTypeConsume, ModelName: "gpt-5", TokenId: reconToken.Id, Quota: 125, PromptTokens: 1, CompletionTokens: 1, RequestId: "gw-3"},
+				{UserId: user.Id, CreatedAt: base + 1, Type: model.LogTypeConsume, ModelName: "claude-opus-4-7", TokenId: reconToken.Id, TokenName: reconToken.Name, Quota: 500, PromptTokens: 100, CompletionTokens: 20, IsStream: true, RequestId: "gw-1", PlatformRequestId: "platform-1", UpstreamRequestId: "up-1", Other: `{"request_path":"/v1/messages","claude":true,"cache_tokens":30,"cache_creation_tokens":50,"cache_creation_tokens_5m":50}`},
+				{UserId: user.Id, CreatedAt: base + 2, Type: model.LogTypeConsume, ModelName: "gpt-5", TokenId: otherToken.Id, TokenName: otherToken.Name, Quota: 250, PromptTokens: 10, CompletionTokens: 5, RequestId: "gw-2", Other: `{"request_path":"/v1/chat/completions","model_price":0.02}`},
+				{UserId: user.Id, CreatedAt: base + 3, Type: model.LogTypeConsume, ModelName: "gpt-5", TokenId: reconToken.Id, TokenName: reconToken.Name, Quota: 125, PromptTokens: 1, CompletionTokens: 1, RequestId: "gw-3", Other: `{"request_path":"/v1/chat/completions"}`},
 				// Non-consume and out-of-window rows must never be billed back.
-				{UserId: user.Id, CreatedAt: base + 4, Type: model.LogTypeError, ModelName: "gpt-5", TokenId: reconToken.Id, RequestId: "gw-err"},
-				{UserId: user.Id, CreatedAt: base + 9999, Type: model.LogTypeConsume, ModelName: "gpt-5", TokenId: reconToken.Id, Quota: 900, RequestId: "gw-late"},
+				{UserId: user.Id, CreatedAt: base + 4, Type: model.LogTypeError, ModelName: "gpt-5", TokenId: reconToken.Id, TokenName: reconToken.Name, RequestId: "gw-err"},
+				{UserId: user.Id, CreatedAt: base + 9999, Type: model.LogTypeConsume, ModelName: "gpt-5", TokenId: reconToken.Id, TokenName: reconToken.Name, Quota: 900, RequestId: "gw-late"},
 			}
 			require.NoError(t, logDB.Create(&rows).Error)
 
@@ -167,7 +170,6 @@ func TestReconciliationAPI(t *testing.T) {
 					{fmt.Sprintf(`{"beginTime":%d,"endTime":%d}`, base+10, base), dto.ReconCodeInvalidTimeSpan},
 					{fmt.Sprintf(`{"beginTime":%d,"endTime":%d}`, base, base+24*60*60+1), dto.ReconCodeInvalidTimeSpan},
 					{fmt.Sprintf(`{"beginTime":%d,"endTime":%d,"beginCursor":-1}`, base, base+10), dto.ReconCodeInvalidParam},
-					{fmt.Sprintf(`{"beginTime":%d,"endTime":%d,"apiKeyId":"abc"}`, base, base+10), dto.ReconCodeInvalidParam},
 				}
 				for _, testCase := range cases {
 					_, envelope := post(t, reconKey, testCase.body)
@@ -185,7 +187,7 @@ func TestReconciliationAPI(t *testing.T) {
 				first := data.Items[0]
 				assert.Equal(t, "platform-1", first.RequestId, "the caller's own id wins when supplied")
 				assert.Equal(t, "up-1", first.UpstreamRequestId)
-				assert.Equal(t, fmt.Sprint(reconToken.Id), first.ApiKeyId)
+				assert.Equal(t, reconToken.Name, first.ApiKeyId, "apiKeyId is the key name operators see")
 				assert.Equal(t, base+1, first.ConsumeAt)
 				assert.True(t, first.Stream)
 				assert.EqualValues(t, 120, first.TotalTokens)
@@ -193,14 +195,21 @@ func TestReconciliationAPI(t *testing.T) {
 				assert.Equal(t, json.Number("0.001"), first.TotalCost, "500 quota over 500000 units per USD")
 				usage, ok := first.UsageDetail.(map[string]any)
 				require.True(t, ok)
-				assert.EqualValues(t, 100, usage["input_tokens"])
+				assert.EqualValues(t, 100, usage["input_tokens"], "Anthropic input_tokens excludes cache")
 				assert.EqualValues(t, 20, usage["output_tokens"])
-				inputDetails, ok := usage["input_tokens_details"].(map[string]any)
+				assert.EqualValues(t, 30, usage["cache_read_input_tokens"])
+				assert.EqualValues(t, 50, usage["cache_creation_input_tokens"])
+				creation, ok := usage["cache_creation"].(map[string]any)
 				require.True(t, ok)
-				assert.EqualValues(t, 7, inputDetails["cached_tokens"])
-				assert.EqualValues(t, 3, inputDetails["cache_write_tokens"])
+				assert.EqualValues(t, 50, creation["ephemeral_5m_input_tokens"])
+				assert.NotContains(t, usage, "prompt_tokens", "the caller asked over the Anthropic API")
 
 				assert.Equal(t, "gw-2", data.Items[1].RequestId, "without a caller id the gateway id is the anchor")
+				chatUsage, ok := data.Items[1].UsageDetail.(map[string]any)
+				require.True(t, ok)
+				assert.EqualValues(t, 10, chatUsage["prompt_tokens"], "OpenAI prompt_tokens keeps cache as a subset")
+				assert.EqualValues(t, 5, chatUsage["completion_tokens"])
+				assert.EqualValues(t, 15, chatUsage["total_tokens"])
 				assert.Equal(t, "per_call", data.Items[1].PriceType)
 				assert.Equal(t, "token", data.Items[2].PriceType)
 			})
@@ -224,11 +233,56 @@ func TestReconciliationAPI(t *testing.T) {
 			})
 
 			t.Run("apiKeyId filter", func(t *testing.T) {
-				_, envelope := post(t, reconKey, fmt.Sprintf(`{"beginTime":%d,"endTime":%d,"apiKeyId":"%d"}`, base, base+100, otherToken.Id))
+				_, envelope := post(t, reconKey, fmt.Sprintf(`{"beginTime":%d,"endTime":%d,"apiKeyId":%q}`, base, base+100, otherToken.Name))
 				data := decodeConsumes(t, envelope)
 				require.Len(t, data.Items, 1)
 				assert.Equal(t, "gw-2", data.Items[0].RequestId)
 				assert.EqualValues(t, 1, data.Total)
+			})
+
+			t.Run("usage detail follows the caller's protocol", func(t *testing.T) {
+				// Same upstream numbers, four different caller-facing APIs. The
+				// stored counts carry the upstream provider's semantics, so the
+				// Anthropic reading (cache excluded) and the OpenAI reading
+				// (cache as a subset) must both come out right.
+				claudeLog := &model.Log{PromptTokens: 100, CompletionTokens: 20}
+				claudeOther := map[string]any{"claude": true, "cache_tokens": float64(30), "cache_creation_tokens": float64(50)}
+				openAILog := &model.Log{PromptTokens: 180, CompletionTokens: 20}
+				openAIOther := map[string]any{"cache_tokens": float64(30)}
+
+				anthropic := buildUsageDetail(claudeLog, mergeOther(claudeOther, "/v1/messages"))
+				assert.EqualValues(t, 100, anthropic["input_tokens"])
+				assert.EqualValues(t, 30, anthropic["cache_read_input_tokens"])
+				assert.EqualValues(t, 50, anthropic["cache_creation_input_tokens"])
+
+				// Claude upstream reached over the OpenAI API: prompt_tokens has
+				// to be widened back to include the cache, or the caller sees a
+				// smaller input than it was billed for.
+				chat := buildUsageDetail(claudeLog, mergeOther(claudeOther, "/v1/chat/completions"))
+				assert.EqualValues(t, 180, chat["prompt_tokens"])
+				assert.EqualValues(t, 200, chat["total_tokens"])
+				promptDetails, ok := chat["prompt_tokens_details"].(map[string]any)
+				require.True(t, ok)
+				assert.EqualValues(t, 30, promptDetails["cached_tokens"])
+
+				// OpenAI upstream over the Responses API: already inclusive.
+				responses := buildUsageDetail(openAILog, mergeOther(openAIOther, "/v1/responses"))
+				assert.EqualValues(t, 180, responses["input_tokens"])
+				assert.EqualValues(t, 200, responses["total_tokens"])
+				inputDetails, ok := responses["input_tokens_details"].(map[string]any)
+				require.True(t, ok)
+				assert.EqualValues(t, 30, inputDetails["cached_tokens"])
+
+				gemini := buildUsageDetail(openAILog, mergeOther(openAIOther, "/v1beta/models/gemini-3-flash:generateContent"))
+				assert.EqualValues(t, 180, gemini["promptTokenCount"])
+				assert.EqualValues(t, 20, gemini["candidatesTokenCount"])
+				assert.EqualValues(t, 200, gemini["totalTokenCount"])
+				assert.EqualValues(t, 30, gemini["cachedContentTokenCount"])
+
+				// The Gemini OpenAI-compatible surface answers in OpenAI shape.
+				compatible := buildUsageDetail(openAILog, mergeOther(openAIOther, "/v1beta/openai/chat/completions"))
+				assert.Contains(t, compatible, "prompt_tokens")
+				assert.NotContains(t, compatible, "promptTokenCount")
 			})
 
 			t.Run("balance", func(t *testing.T) {
@@ -249,4 +303,12 @@ func TestReconciliationAPI(t *testing.T) {
 			})
 		})
 	}
+}
+
+// mergeOther clones the decoded log metadata with the request path that
+// identifies which API family the caller used.
+func mergeOther(base map[string]any, requestPath string) map[string]any {
+	merged := map[string]any{"request_path": requestPath}
+	maps.Copy(merged, base)
+	return merged
 }

@@ -488,14 +488,31 @@ orchestrator behaviour stays normal during the migration.
     database synthesizes them at query time. Ordering is
     `created_at asc, request_id asc`, which matches the ClickHouse table's
     `ORDER BY (created_at, request_id)` so paging stays index-ordered.
-  - **usageDetail is derived, not passed through.** The gateway normalizes
-    provider usage into its own counters instead of storing the vendor payload,
-    and an upstream that is itself a new-api instance never returns the original
-    structure, so a byte-for-byte passthrough is not obtainable. The endpoint
-    returns a normalized OpenAI-shaped breakdown rebuilt from the stored token
-    counts and cache/text/audio fields.
+  - **usageDetail is re-projected per protocol, not passed through.** The
+    gateway normalizes provider usage into its own counters instead of storing
+    the vendor payload, and an upstream that is itself a new-api instance never
+    returns the original structure, so a byte-for-byte passthrough is not
+    obtainable. Instead the counts are rendered in the wire shape of the API
+    family the caller used, keyed off `other.request_path`: `/v1/messages` →
+    Anthropic, `/v1/responses` → OpenAI Responses, native `/v1beta/**` → Gemini,
+    everything else (including `/v1beta/openai/**`) → OpenAI chat.
+  - **Two input-token conventions.** The stored counts carry the *upstream*
+    provider's semantics, which is independent of the caller's protocol:
+    the Claude adaptor keeps Anthropic's `input_tokens` (cache reads and writes
+    excluded), while OpenAI-shaped upstreams store `prompt_tokens` with
+    `cached_tokens` as a subset. `other.claude` marks the Anthropic-semantic
+    rows, so `collectUsageFacts` derives both readings once and each renderer
+    picks the one its format expects. Getting this wrong under-reports input by
+    the cache size on cross-protocol traffic.
+  - **`apiKeyId` is the key name**, not the internal token id — that is the
+    identifier shown in the API-keys console and the one the caller configures.
+    Filtering matches `token_name` exactly. Names are not enforced unique per
+    user, so a duplicated name reconciles as one logical key.
   - **Money** is emitted as `json.Number` computed with `decimal`, so amounts
     stay exact JSON numbers with no float error and no scientific notation.
+  - **priceType** is `token` for metered models and `per_call` for a fixed
+    per-request price; `resolution` / `quantity` stay empty because this
+    deployment sells no image or per-unit models.
   - **Reconciliation key uses existing controls, no new permission flag**: give
     the token unlimited quota (so it is never treated as exhausted) and enable
     the model allow-list while leaving it **empty**, which makes

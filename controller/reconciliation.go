@@ -3,7 +3,6 @@ package controller
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -60,21 +59,16 @@ func GetReconciliationConsumes(c *gin.Context) {
 		limit = reconciliationMaxLimit
 	}
 
-	tokenId := 0
-	if apiKeyId := strings.TrimSpace(req.ApiKeyId); apiKeyId != "" {
-		parsed, err := strconv.Atoi(apiKeyId)
-		if err != nil || parsed <= 0 {
-			writeReconciliation(c, http.StatusBadRequest, dto.ReconCodeInvalidParam, "apiKeyId must be a positive integer key id", nil)
-			return
-		}
-		tokenId = parsed
-	}
+	// apiKeyId is the key's name: that is the identifier operators see in the
+	// API-keys list and the one the caller configures on its side. Token ids are
+	// internal and never surfaced in the console.
+	tokenName := strings.TrimSpace(req.ApiKeyId)
 
 	logs, total, err := model.GetReconciliationConsumeLogs(model.ReconciliationConsumeQuery{
 		UserId:    c.GetInt("id"),
 		BeginTime: req.BeginTime,
 		EndTime:   req.EndTime,
-		TokenId:   tokenId,
+		TokenName: tokenName,
 		Offset:    req.BeginCursor,
 		Limit:     limit,
 	})
@@ -140,7 +134,7 @@ func buildConsumeItem(log *model.Log, cursor int64) dto.ConsumeItem {
 		Cursor:            cursor,
 		RequestId:         requestId,
 		UpstreamRequestId: log.UpstreamRequestId,
-		ApiKeyId:          strconv.Itoa(log.TokenId),
+		ApiKeyId:          log.TokenName,
 		Model:             log.ModelName,
 		ConsumeAt:         log.CreatedAt,
 		Stream:            log.IsStream,
@@ -154,54 +148,170 @@ func buildConsumeItem(log *model.Log, cursor int64) dto.ConsumeItem {
 }
 
 // consumePriceType maps this gateway's billing modes onto the spec's vocabulary.
+// Everything this deployment sells is metered per token; a fixed per-request
+// price is the only other mode that can reach a consume log today.
 func consumePriceType(other map[string]any) string {
 	if _, ok := other["model_price"]; ok {
 		return "per_call"
 	}
-	if mode, ok := other["billing_mode"].(string); ok && mode != "" {
-		return mode
-	}
 	return "token"
 }
 
-// buildUsageDetail reconstructs the usage breakdown from what the consume log
-// preserves. The gateway normalizes provider usage into its own token counters
-// rather than storing the upstream payload verbatim — and an upstream that is
-// itself a new-api instance never returns the original vendor structure — so
-// this is a normalized OpenAI-shaped view, not a byte-for-byte passthrough.
+// usageFacts is the protocol-neutral view of a billed call, reconstructed from
+// the consume log. The stored numbers carry the *upstream* provider's
+// semantics, which is independent of the protocol the caller used, so both
+// readings of the input count are derived once here and the per-protocol
+// renderers below pick whichever one their format expects.
+type usageFacts struct {
+	inputExcludingCache int
+	inputIncludingCache int
+	output              int
+	cacheRead           int
+	cacheWrite          int
+	cacheWrite5m        int
+	cacheWrite1h        int
+	textInput           int
+	textOutput          int
+	audioInput          int
+	audioOutput         int
+}
+
+// collectUsageFacts normalizes the two input-token conventions this gateway
+// stores. Anthropic reports input_tokens excluding both cache reads and cache
+// writes, and the Claude adaptor keeps that convention verbatim; OpenAI reports
+// prompt_tokens with cached_tokens as a subset. other.claude marks the rows
+// billed under Anthropic semantics, so it decides which direction to convert.
+func collectUsageFacts(log *model.Log, other map[string]any) usageFacts {
+	facts := usageFacts{
+		output:       log.CompletionTokens,
+		cacheRead:    otherInt(other, "cache_tokens"),
+		cacheWrite:   otherInt(other, "cache_creation_tokens"),
+		cacheWrite5m: otherInt(other, "cache_creation_tokens_5m"),
+		cacheWrite1h: otherInt(other, "cache_creation_tokens_1h"),
+		textInput:    otherInt(other, "text_input"),
+		textOutput:   otherInt(other, "text_output"),
+		audioInput:   otherInt(other, "audio_input"),
+		audioOutput:  otherInt(other, "audio_output"),
+	}
+	if claude, _ := other["claude"].(bool); claude {
+		facts.inputExcludingCache = log.PromptTokens
+		facts.inputIncludingCache = log.PromptTokens + facts.cacheRead + facts.cacheWrite
+		return facts
+	}
+	facts.inputIncludingCache = log.PromptTokens
+	facts.inputExcludingCache = max(log.PromptTokens-facts.cacheRead, 0)
+	return facts
+}
+
+// buildUsageDetail renders the usage in the wire shape of the API family the
+// caller actually used, keyed off the inbound request path recorded on the log.
+// The gateway normalizes provider usage into its own counters instead of
+// storing the vendor payload — and an upstream that is itself a new-api
+// instance never returns the original structure — so this is a faithful
+// re-projection of the counts, not a byte-for-byte passthrough. Fields the
+// gateway does not track (reasoning tokens, service tier) are omitted rather
+// than guessed.
 func buildUsageDetail(log *model.Log, other map[string]any) map[string]any {
+	facts := collectUsageFacts(log, other)
+	path, _ := other["request_path"].(string)
+	switch {
+	case strings.HasPrefix(path, "/v1/messages"):
+		return anthropicUsageDetail(facts)
+	case strings.HasPrefix(path, "/v1/responses"):
+		return openAIResponsesUsageDetail(facts)
+	case strings.HasPrefix(path, "/v1beta/") && !strings.HasPrefix(path, "/v1beta/openai/"):
+		return geminiUsageDetail(facts)
+	default:
+		// OpenAI chat/completions is both the widest family here and the shape
+		// the Gemini OpenAI-compatible endpoints answer in.
+		return openAIChatUsageDetail(facts)
+	}
+}
+
+func anthropicUsageDetail(facts usageFacts) map[string]any {
 	detail := map[string]any{
-		"input_tokens":  log.PromptTokens,
-		"output_tokens": log.CompletionTokens,
-		"total_tokens":  log.PromptTokens + log.CompletionTokens,
+		"input_tokens":                facts.inputExcludingCache,
+		"output_tokens":               facts.output,
+		"cache_read_input_tokens":     facts.cacheRead,
+		"cache_creation_input_tokens": facts.cacheWrite,
 	}
-	inputDetails := map[string]any{}
-	if cached := otherInt(other, "cache_tokens"); cached > 0 {
-		inputDetails["cached_tokens"] = cached
-	}
-	if cacheWrite := otherInt(other, "cache_creation_tokens"); cacheWrite > 0 {
-		inputDetails["cache_write_tokens"] = cacheWrite
-	}
-	if textInput := otherInt(other, "text_input"); textInput > 0 {
-		inputDetails["text_tokens"] = textInput
-	}
-	if audioInput := otherInt(other, "audio_input"); audioInput > 0 {
-		inputDetails["audio_tokens"] = audioInput
-	}
-	if len(inputDetails) > 0 {
-		detail["input_tokens_details"] = inputDetails
-	}
-	outputDetails := map[string]any{}
-	if textOutput := otherInt(other, "text_output"); textOutput > 0 {
-		outputDetails["text_tokens"] = textOutput
-	}
-	if audioOutput := otherInt(other, "audio_output"); audioOutput > 0 {
-		outputDetails["audio_tokens"] = audioOutput
-	}
-	if len(outputDetails) > 0 {
-		detail["output_tokens_details"] = outputDetails
+	if facts.cacheWrite5m > 0 || facts.cacheWrite1h > 0 {
+		detail["cache_creation"] = map[string]any{
+			"ephemeral_5m_input_tokens": facts.cacheWrite5m,
+			"ephemeral_1h_input_tokens": facts.cacheWrite1h,
+		}
 	}
 	return detail
+}
+
+func openAIResponsesUsageDetail(facts usageFacts) map[string]any {
+	return map[string]any{
+		"input_tokens":  facts.inputIncludingCache,
+		"output_tokens": facts.output,
+		"total_tokens":  facts.inputIncludingCache + facts.output,
+		"input_tokens_details": map[string]any{
+			"cached_tokens":      facts.cacheRead,
+			"cache_write_tokens": facts.cacheWrite,
+		},
+	}
+}
+
+func openAIChatUsageDetail(facts usageFacts) map[string]any {
+	detail := map[string]any{
+		"prompt_tokens":     facts.inputIncludingCache,
+		"completion_tokens": facts.output,
+		"total_tokens":      facts.inputIncludingCache + facts.output,
+	}
+	promptDetails := map[string]any{"cached_tokens": facts.cacheRead}
+	if facts.textInput > 0 {
+		promptDetails["text_tokens"] = facts.textInput
+	}
+	if facts.audioInput > 0 {
+		promptDetails["audio_tokens"] = facts.audioInput
+	}
+	detail["prompt_tokens_details"] = promptDetails
+	if facts.textOutput > 0 || facts.audioOutput > 0 {
+		completionDetails := map[string]any{}
+		if facts.textOutput > 0 {
+			completionDetails["text_tokens"] = facts.textOutput
+		}
+		if facts.audioOutput > 0 {
+			completionDetails["audio_tokens"] = facts.audioOutput
+		}
+		detail["completion_tokens_details"] = completionDetails
+	}
+	return detail
+}
+
+func geminiUsageDetail(facts usageFacts) map[string]any {
+	detail := map[string]any{
+		"promptTokenCount":     facts.inputIncludingCache,
+		"candidatesTokenCount": facts.output,
+		"totalTokenCount":      facts.inputIncludingCache + facts.output,
+	}
+	if facts.cacheRead > 0 {
+		detail["cachedContentTokenCount"] = facts.cacheRead
+	}
+	if modalities := modalityBreakdown(facts.textInput, facts.audioInput); len(modalities) > 0 {
+		detail["promptTokensDetails"] = modalities
+	}
+	if modalities := modalityBreakdown(facts.textOutput, facts.audioOutput); len(modalities) > 0 {
+		detail["candidatesTokensDetails"] = modalities
+	}
+	return detail
+}
+
+// modalityBreakdown renders Gemini's per-modality token arrays. Only modalities
+// the gateway actually counted are listed.
+func modalityBreakdown(textTokens, audioTokens int) []map[string]any {
+	breakdown := make([]map[string]any, 0, 2)
+	if textTokens > 0 {
+		breakdown = append(breakdown, map[string]any{"modality": "TEXT", "tokenCount": textTokens})
+	}
+	if audioTokens > 0 {
+		breakdown = append(breakdown, map[string]any{"modality": "AUDIO", "tokenCount": audioTokens})
+	}
+	return breakdown
 }
 
 // otherInt reads a numeric field from the decoded log metadata, which round

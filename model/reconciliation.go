@@ -10,8 +10,8 @@ type ReconciliationConsumeQuery struct {
 	UserId    int
 	BeginTime int64
 	EndTime   int64
-	TokenId   int   // 0 means every token of the user
-	Offset    int64 // rows already consumed by the caller, the spec's beginCursor
+	TokenName string // empty means every key of the user
+	Offset    int64  // rows already consumed by the caller, the spec's beginCursor
 	Limit     int
 }
 
@@ -30,8 +30,8 @@ func GetReconciliationConsumeLogs(query ReconciliationConsumeQuery) (logs []*Log
 			Where("user_id = ?", query.UserId).
 			Where("created_at >= ?", query.BeginTime).
 			Where("created_at <= ?", query.EndTime)
-		if query.TokenId > 0 {
-			tx = tx.Where("token_id = ?", query.TokenId)
+		if query.TokenName != "" {
+			tx = tx.Where("token_name = ?", query.TokenName)
 		}
 		return tx
 	}

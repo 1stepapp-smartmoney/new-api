@@ -19,6 +19,28 @@ official upstream solution** that solves the same problem.
 
 > **Recent upstream merges:**
 >
+> - **2026-09-09 → upstream rc.36** (105 commits). Adoption check: the fork's
+>   substantive entries were **not** adopted upstream and are all retained, but
+>   upstream did land its own **root-scoped log views**, so part of §4's frontend
+>   plumbing was dropped in its favour: `useLogsViewScope()` now returns
+>   `isRootView` / `viewAccess`, which replaces the fork-only `useIsRoot` hook —
+>   `web/src/hooks/use-root.ts` was deleted and both the IP column and the IP
+>   filter now gate on `isRootView`. Note the behaviour nuance: gating moved from
+>   "user is root" to "the current log view is the root view", so a root user
+>   looking at the personal view no longer sees the IP column/filter. The backend
+>   remains the security boundary and still gates on `role >= RoleRootUser`.
+>   Other churn: upstream replaced the log `other` map with a visibility-scoped
+>   `*model.LogOther` (`SetPublic`/`SetAdmin`/`SetRoot`) and moved audit logs to a
+>   separate table, so §8's telemetry now writes via `other.SetPublic(...)`, and
+>   `controller/log.go` combines the fork's IP stripping with upstream's
+>   `FormatAdminLogs`/`FormatRootLogs`. §9 kept its client-disconnect indicator
+>   and picked up upstream's new `isTask` prop on `StreamTpsCell`.
+>
+>   *Tooling note:* the frontend typecheck must be run with the **repo root**
+>   mounted, not just `web/` — `web/src/features/pricing/lib/__tests__/` imports a
+>   fixture from `pkg/billingexpr/testdata/`, so a `web/`-only mount reports two
+>   bogus TS errors.
+>
 > - **2026-08-15 → upstream rc.24** (37 commits). Adoption check: **none of the
 >   active fork entries were adopted upstream — all retained.** The merge itself
 >   was conflict-free. One upstream defect had to be fixed locally: upstream
@@ -149,8 +171,9 @@ official upstream solution** that solves the same problem.
     `/api/log/` and `/api/log/self`; strips `Log.Ip` from the response for
     non-root callers and unconditionally for the token-auth
     `GetLogByKey` endpoint).
-  - Default UI: `web/src/hooks/use-root.ts` (new `useIsRoot`
-    hook, mirror of `useIsAdmin`),
+  - Default UI: root gating comes from upstream's
+    `useLogsViewScope().isRootView` (the fork's own `web/src/hooks/use-root.ts`
+    was retired in the rc.36 merge once upstream shipped root-scoped log views),
     `web/src/features/usage-logs/types.ts` (`CommonLogFilters.ip`),
     `…/lib/filter.ts`, `…/lib/utils.ts`, `…/lib/columns.ts`
     (column factory now takes `isRoot`),

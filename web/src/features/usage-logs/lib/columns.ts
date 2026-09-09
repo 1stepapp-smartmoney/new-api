@@ -38,7 +38,7 @@ export function useColumnsByCategory(
 ): ColumnDef<any>[] {
   const commonColumns = useCommonLogsColumns(isAdmin, isRoot)
   const drawingColumns = useDrawingLogsColumns(isAdmin)
-  const taskColumns = useTaskLogsColumns(isAdmin)
+  const taskColumns = useTaskLogsColumns(isAdmin, isRoot)
 
   switch (logCategory) {
     case 'common':

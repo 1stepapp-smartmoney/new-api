@@ -37,9 +37,13 @@ func GetAllLogs(c *gin.Context) {
 		return
 	}
 	if !isRoot {
+		// fork §4: the IP column is root-only; strip it before returning.
 		for i := range logs {
 			logs[i].Ip = ""
 		}
+		model.FormatAdminLogs(logs)
+	} else {
+		model.FormatRootLogs(logs)
 	}
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(logs)

@@ -513,18 +513,31 @@ orchestrator behaviour stays normal during the migration.
   - **priceType** is `token` for metered models and `per_call` for a fixed
     per-request price; `resolution` / `quantity` stay empty because this
     deployment sells no image or per-unit models.
-  - **Reconciliation key uses existing controls, no new permission flag**: give
-    the token unlimited quota (so it is never treated as exhausted) and enable
-    the model allow-list while leaving it **empty**, which makes
-    `tokenModelLimitAllows` reject every model with 403. The endpoints read data
-    and never consume quota.
-  - **That same configuration is the marker.** The middleware admits a key only
-    when the model allow-list is enabled *and* empty — the one configuration
-    that can call no model, so it can only be a reconciliation key. This closes
-    the reverse direction the spec leaves implicit: an ordinary relay key is
-    rejected with 1002, so a leaked AI key cannot enumerate the account's
-    consumption ledger or balance. Queries are additionally scoped to the
-    token's own user, so a key never sees another account's rows.
+  - **Reconciliation key is an ordinary key created with zero quota**, and that
+    shape is both the capability boundary and the marker — no new permission
+    flag, no schema change:
+    - It cannot call a model: the relay path rejects a token whose remaining
+      quota is exhausted, and these endpoints consume no quota.
+    - It is identifiable: the middleware admits only
+      `!UnlimitedQuota && RemainQuota <= 0 && UsedQuota == 0`, so an ordinary
+      relay key is refused with 1002 and a leaked AI key cannot enumerate the
+      account's ledger or balance. Queries are additionally scoped to the
+      token's own user, so a key never sees another account's rows.
+    - `UsedQuota == 0` separates "created without quota" from "relay key that
+      ran out": a key that ever billed anything has a non-zero used quota, so
+      exhausting a normal key never silently grants ledger access.
+    - The middleware therefore does its own validation rather than calling
+      `model.ValidateUserToken`, which treats a zero-quota token as invalid —
+      precisely the token that must be admitted here. A zero-quota token may
+      also carry the exhausted status, so enabled and exhausted are both
+      accepted while disabled and expired are not.
+  - **Rejected alternative:** gating on "model allow-list enabled but empty"
+    looks equivalent at the backend (`tokenModelLimitAllows` then denies every
+    model) but is **not constructible in the console** —
+    `web/src/features/keys/lib/api-key-form.ts` derives
+    `model_limits_enabled: data.model_limits.length > 0`, so an empty list means
+    *allow all*, exactly as the form's help text says. Gating on it would have
+    rejected every key an operator can actually create.
 - **Upstream adoption check**:
   ```bash
   # If upstream ships its own reconciliation/billing-export API, compare before

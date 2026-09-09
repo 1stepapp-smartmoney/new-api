@@ -100,18 +100,18 @@ func TestReconciliationAPI(t *testing.T) {
 
 			user := model.User{Username: "recon-user", Password: "unused", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", Quota: 1_000_000}
 			require.NoError(t, db.Create(&user).Error)
-			// A reconciliation key is an ordinary token restricted with the
-			// existing controls: unlimited quota so it is never "exhausted",
-			// and an empty model allow-list so no relay call can pass.
+			// A reconciliation key is an ordinary token created with no quota:
+			// the relay path refuses an exhausted token, so it can never call a
+			// model, and these endpoints consume nothing.
 			const reconKey = "reconkey00000000000000000000000000"
-			reconToken := model.Token{UserId: user.Id, Key: reconKey, Name: "reconciliation", Status: common.TokenStatusEnabled, ExpiredTime: -1, UnlimitedQuota: true, ModelLimitsEnabled: true, ModelLimits: ""}
+			reconToken := model.Token{UserId: user.Id, Key: reconKey, Name: "reconciliation", Status: common.TokenStatusEnabled, ExpiredTime: -1, UnlimitedQuota: false, RemainQuota: 0, UsedQuota: 0}
 			require.NoError(t, db.Create(&reconToken).Error)
 			otherToken := model.Token{UserId: user.Id, Key: "otherkey0000000000000000000000000", Name: "relay", Status: common.TokenStatusEnabled, ExpiredTime: -1, UnlimitedQuota: true}
 			require.NoError(t, db.Create(&otherToken).Error)
-
-			// The empty allow-list must deny every model; that is what makes the
-			// key reconciliation-only without a new permission flag.
-			assert.Empty(t, reconToken.GetModelLimitsMap())
+			// An ordinary relay key that ran out of quota: zero remaining, but it
+			// has billed before, so it must not become a reconciliation key.
+			exhaustedToken := model.Token{UserId: user.Id, Key: "exhausted00000000000000000000000", Name: "spent", Status: common.TokenStatusExhausted, ExpiredTime: -1, UnlimitedQuota: false, RemainQuota: 0, UsedQuota: 4242}
+			require.NoError(t, db.Create(&exhaustedToken).Error)
 
 			const base int64 = 1_780_000_000
 			// Anthropic semantics: prompt_tokens excludes both cache reads and
@@ -159,10 +159,13 @@ func TestReconciliationAPI(t *testing.T) {
 					assert.Equal(t, dto.ReconCodeUnauthorized, envelope.Code)
 					assert.NotEmpty(t, envelope.RequestId, "every response carries a request id for support")
 				}
-				// A relay key is a valid credential but must not be able to read
-				// the billing ledger: only a key that can call no model may.
-				_, envelope := post(t, "otherkey0000000000000000000000000", `{"beginTime":1,"endTime":2}`)
-				assert.Equal(t, dto.ReconCodeForbidden, envelope.Code, "an ordinary AI key cannot reconcile")
+				// Valid credentials that are not reconciliation keys must be
+				// refused: an ordinary relay key, and — the case that makes
+				// used_quota part of the marker — one that merely ran out.
+				for _, key := range []string{"otherkey0000000000000000000000000", "exhausted00000000000000000000000"} {
+					_, envelope := post(t, key, `{"beginTime":1,"endTime":2}`)
+					assert.Equal(t, dto.ReconCodeForbidden, envelope.Code, "only a zero-quota, never-billed key reconciles")
+				}
 			})
 
 			t.Run("window guards", func(t *testing.T) {

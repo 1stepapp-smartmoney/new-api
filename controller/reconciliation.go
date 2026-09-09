@@ -150,11 +150,32 @@ func buildConsumeItem(log *model.Log, cursor int64) dto.ConsumeItem {
 // consumePriceType maps this gateway's billing modes onto the spec's vocabulary.
 // Everything this deployment sells is metered per token; a fixed per-request
 // price is the only other mode that can reach a consume log today.
+//
+// model_price is written on every text consume log, so its presence says
+// nothing — only a positive value means the call was billed per request. This
+// mirrors isPerCallBilling() in the log UI.
 func consumePriceType(other map[string]any) string {
-	if _, ok := other["model_price"]; ok {
+	if price, ok := otherFloat(other, "model_price"); ok && price > 0 {
 		return "per_call"
 	}
 	return "token"
+}
+
+// otherFloat reads a numeric field from the decoded log metadata, which round
+// trips through JSON and therefore arrives as float64.
+func otherFloat(other map[string]any, key string) (float64, bool) {
+	switch v := other[key].(type) {
+	case float64:
+		return v, true
+	case json.Number:
+		parsed, err := v.Float64()
+		if err != nil {
+			return 0, false
+		}
+		return parsed, true
+	default:
+		return 0, false
+	}
 }
 
 // usageFacts is the protocol-neutral view of a billed call, reconstructed from

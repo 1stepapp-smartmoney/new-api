@@ -217,8 +217,12 @@ func TestReconciliationAPI(t *testing.T) {
 				assert.EqualValues(t, 10, chatUsage["prompt_tokens"], "OpenAI prompt_tokens keeps cache as a subset")
 				assert.EqualValues(t, 5, chatUsage["completion_tokens"])
 				assert.EqualValues(t, 15, chatUsage["total_tokens"])
-				assert.Equal(t, "per_call", data.Items[1].PriceType)
+				assert.Equal(t, "per_call", data.Items[1].PriceType, "a positive model_price means per-request billing")
 				assert.Equal(t, "token", data.Items[2].PriceType)
+				// model_price is written on every text consume log, so a zero
+				// value must still read as token billing.
+				assert.Equal(t, "token", consumePriceType(map[string]any{"model_price": float64(0)}))
+				assert.Equal(t, "token", consumePriceType(map[string]any{}))
 			})
 
 			t.Run("offset cursor paging", func(t *testing.T) {

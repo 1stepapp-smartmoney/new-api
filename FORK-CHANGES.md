@@ -477,6 +477,15 @@ orchestrator behaviour stays normal during the migration.
   - `model/reconciliation.go`, `dto/reconciliation.go`,
     `controller/reconciliation.go`, `middleware/reconciliation.go`,
     `router/api-router.go`: the endpoints themselves.
+- **Kill switch**: the endpoints are **off by default**. Set
+  `RECONCILIATION_API_ENABLED=true` to expose them; anything else refuses every
+  caller with HTTP 403 / code 1002 before the credential is read, so a disabled
+  deployment performs no authentication and touches no billing data. 1002 (not
+  authorized for this resource) is used rather than the retryable 3001 so the
+  caller contacts the operator instead of backing off and retrying forever.
+  Capture of the inbound `platform_request_id` is **not** gated by this switch:
+  it costs nothing, and pausing it would leave a permanent hole in the
+  correlation ids once reconciliation is switched back on.
 - **Design notes**:
   - **Correlation id**: three ids now coexist and must not be conflated —
     `request_id` (this gateway's), `upstream_request_id` (the provider's, §6),

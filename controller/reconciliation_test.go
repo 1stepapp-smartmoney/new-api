@@ -79,14 +79,17 @@ func TestReconciliationAPI(t *testing.T) {
 			previousDB, previousLogDB := model.DB, model.LOG_DB
 			previousMain, previousLog := common.MainDatabaseType(), common.LogDatabaseType()
 			previousRedis := common.RedisEnabled
+			previousEnabled := common.ReconciliationAPIEnabled
 			model.DB, model.LOG_DB = db, logDB
 			common.SetDatabaseTypes(dbType, dbType)
 			model.InitColumnQuoting()
 			common.RedisEnabled = false
+			common.ReconciliationAPIEnabled = true
 			t.Cleanup(func() {
 				model.DB, model.LOG_DB = previousDB, previousLogDB
 				common.SetDatabaseTypes(previousMain, previousLog)
 				common.RedisEnabled = previousRedis
+				common.ReconciliationAPIEnabled = previousEnabled
 			})
 
 			for _, table := range []any{&model.User{}, &model.Token{}} {
@@ -166,6 +169,25 @@ func TestReconciliationAPI(t *testing.T) {
 					_, envelope := post(t, key, `{"beginTime":1,"endTime":2}`)
 					assert.Equal(t, dto.ReconCodeForbidden, envelope.Code, "only a zero-quota, never-billed key reconciles")
 				}
+			})
+
+			t.Run("kill switch", func(t *testing.T) {
+				// Disabled is the default, and it must fail every caller —
+				// including a valid reconciliation key — before any credential
+				// is read or any billing data is touched.
+				common.ReconciliationAPIEnabled = false
+				t.Cleanup(func() { common.ReconciliationAPIEnabled = true })
+
+				response, envelope := post(t, reconKey, fmt.Sprintf(`{"beginTime":%d,"endTime":%d}`, base, base+100))
+				assert.Equal(t, http.StatusForbidden, response.Code)
+				assert.Equal(t, dto.ReconCodeForbidden, envelope.Code)
+				assert.Nil(t, envelope.Data, "a disabled endpoint returns no ledger data")
+
+				balance := httptest.NewRecorder()
+				request := httptest.NewRequest(http.MethodGet, "/api/v1/balance", nil)
+				request.Header.Set("x-api-key", reconKey)
+				router.ServeHTTP(balance, request)
+				assert.Equal(t, http.StatusForbidden, balance.Code)
 			})
 
 			t.Run("window guards", func(t *testing.T) {

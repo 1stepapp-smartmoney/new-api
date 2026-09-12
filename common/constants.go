@@ -246,6 +246,11 @@ var (
 	ReconciliationRateLimitNum            = 120
 	ReconciliationRateLimitDuration int64 = 60
 
+	// ReconciliationAPIEnabled gates the supplier reconciliation endpoints
+	// (fork §10). It defaults to off so the ledger is only reachable where an
+	// operator has deliberately turned it on for a customer integration.
+	ReconciliationAPIEnabled = false
+
 	UploadRateLimitNum            = 10
 	UploadRateLimitDuration int64 = 60
 

@@ -29,6 +29,16 @@ import (
 // so exhausting a normal key never silently grants access to the ledger.
 func ReconciliationAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
+		// Kill switch. Checked before the credential is even read, so a disabled
+		// deployment does no authentication and touches no billing data. 1002 is
+		// the spec's "not authorized for this resource", which tells the caller
+		// to contact us rather than retry, unlike the retryable 3001.
+		if !common.ReconciliationAPIEnabled {
+			abortReconciliation(c, http.StatusForbidden, dto.ReconCodeForbidden,
+				"the reconciliation API is disabled on this deployment")
+			return
+		}
+
 		key := strings.TrimSpace(c.Request.Header.Get("x-api-key"))
 		key = strings.TrimPrefix(key, "sk-")
 		if key == "" {

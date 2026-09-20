@@ -555,6 +555,49 @@ orchestrator behaviour stays normal during the migration.
   git grep -n "platform_request_id" upstream/main
   ```
 
+### 11. Log database write-health signal (`log_db` on `/api/status/test`)
+
+- **Why**: On 2026-09-18 the ClickHouse log volume filled up and **all three
+  production sites stopped recording billing logs for two days before anyone
+  noticed**. The code was not silent — `createLog` already logged every failure
+  — but on a deployment serving ~340 req/s that produced 12,130 identical
+  per-request lines inside an access-log firehose whose container log retained
+  only the last ~25 minutes. The failure was *logged* but not *observable*, and
+  there was nothing for external monitoring to poll. Log writes are
+  best-effort by design (a failure never fails the user's request), so nothing
+  else surfaces the gap. The root cause was ClickHouse's own `system.text_log`
+  (114.89 GiB), not our data.
+- **Touched files**:
+  - `model/log_db_health.go` (new): `LogDBWriteHealth` plus `noteLogDBWrite`,
+    which folds a sustained outage into one report per 30s instead of one per
+    dropped request, and logs a recovery line stating how many writes were lost
+    and for how long. Reporting rearms on recovery so a second outage is not
+    silenced by the first one's rate limit.
+  - `model/log.go`: `createLog` reports each write outcome. This is the single
+    choke point for every `Record*Log` entry point.
+  - `model/audit_log.go`: the direct `audit_logs` insert reports too, since it
+    targets the same `LOG_DB`.
+  - `controller/misc.go`: `TestStatus` returns the health under `log_db`.
+    `/api/status/test` is already `AdminAuth()`-gated and is referenced nowhere
+    in `web/`, so it is a pure ops endpoint.
+- **Deliberately not done**: `TestStatus` still returns 200 when only the log
+  database is failing. It already returns 503 for a main-database failure, but
+  the node keeps serving relay traffic correctly during a log outage, and a 503
+  here would let a liveness probe or load balancer evict a healthy node.
+  Monitoring should alert on `log_db.healthy == false` in the body instead.
+- **Verification**: no schema, SQL, GORM tag, or migration change — the write
+  path is untouched and only the already-returned `error` value is inspected,
+  so the three-database matrix does not apply. `go build ./model/...
+  ./controller/... ./router/...`, `go vet`, and `go test ./model/
+  ./controller/` all pass; the regression case lives in
+  `model/clickhouse_log_test.go` (`TestLogDBWriteHealthTracksOutageAndRecovery`).
+- **Upstream adoption check**:
+  ```bash
+  # If upstream adds its own log-write health/metrics surface, prefer it.
+  git grep -n "log_db\|LogDBWriteHealth\|noteLogDBWrite" upstream/main
+  git grep -n "prometheus\|/metrics" upstream/main -- router/ controller/
+  ```
+
 ---
 
 ## Tooling / packaging customizations (kept regardless of upstream)
@@ -581,6 +624,30 @@ deployed**. They should remain even if upstream adds similar tooling.
   / `tokyo` / `usw2`. Host and build-dir addresses can be overridden with
   `BUILD_HOST` / `BUILD_DIR` / `TOKYO_HOST` / `USW2_HOST`. See `deploy/README.md`
   for the site table and the per-site compose deltas.
+- `scripts/disk-alert.sh` — disk-usage watchdog that pushes to a Telegram bot,
+  the proactive half of fork §11. §11 only makes an *ongoing* log outage
+  visible; this fires **before** the volume fills, which is the only point at
+  which expanding it is still cheap. Checks every local ext*/xfs/btrfs mount
+  (or the ones named as arguments), alerts at `DISK_ALERT_THRESHOLD` (default
+  90%), repeats at most every `DISK_ALERT_REPEAT_H` hours while still over, and
+  sends one recovery message when it drops back. Credentials come from
+  `/etc/nexapi-disk-alert.conf` (`chmod 600`) or the environment, never from
+  arguments, and the bot token is passed to `curl` through a stdin config so it
+  never appears in `ps`. `--test` verifies the bot wiring, `--dry-run` prints
+  without sending. Install on each host with a systemd timer:
+  ```bash
+  sudo install -m 755 scripts/disk-alert.sh /usr/local/bin/nexapi-disk-alert
+  sudo install -m 600 /dev/stdin /etc/nexapi-disk-alert.conf <<'CONF'
+  TELEGRAM_BOT_TOKEN=<token>
+  TELEGRAM_CHAT_ID=<chat id>
+  CONF
+  sudo systemctl enable --now nexapi-disk-alert.timer   # unit + timer: see below
+  ```
+  The unit is a plain `Type=oneshot` running the script, with an
+  `OnUnitActiveSec=5min` timer. Deployed on the ClickHouse host
+  (`/var/lib/clickhouse`, the volume that filled on 2026-09-18) and on the app
+  hosts. Note this is host-level tooling: it is deliberately **not** wired into
+  the Go binary, so it keeps working when new-api itself is down.
 - `deploy/docker-compose.prod.yml` — tracked copy of the **production**
   compose file (nexapi.org, AWS RDS MySQL + ClickHouse logs + Valkey cache).
   The root `docker-compose.yml` is the upstream demo template with bundled

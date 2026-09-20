@@ -37,6 +37,9 @@ func TestStatus(c *gin.Context) {
 		"success":    true,
 		"message":    "Server is running",
 		"http_stats": httpStats,
+		// fork §11: log writes are best-effort, so a log database outage is
+		// invisible in the request path. Expose it here for external monitoring.
+		"log_db": model.GetLogDBWriteHealth(),
 	})
 	return
 }

@@ -104,7 +104,9 @@ func ensureLogRequestId(log *Log) {
 
 func createLog(log *Log) error {
 	ensureLogRequestId(log)
-	return LOG_DB.Create(log).Error
+	err := LOG_DB.Create(log).Error
+	noteLogDBWrite(err)
+	return err
 }
 
 func clickHouseLogOrder(prefix string) string {

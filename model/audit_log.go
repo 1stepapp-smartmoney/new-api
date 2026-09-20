@@ -131,7 +131,9 @@ func RecordAuditLog(c *gin.Context, entry AuditLog) {
 			EncodedOther string `gorm:"column:other;type:json"`
 		}{AuditLog: entry, EncodedOther: string(encoded)}
 	}
-	if err := LOG_DB.Table("audit_logs").Create(row).Error; err != nil {
+	err := LOG_DB.Table("audit_logs").Create(row).Error
+	noteLogDBWrite(err)
+	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("audit log write failed (request_id=%s): %v", entry.RequestId, err))
 	}
 }

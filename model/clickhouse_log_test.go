@@ -1,9 +1,11 @@
 package model
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 
@@ -151,4 +153,53 @@ func TestAssignDisplayLogIds(t *testing.T) {
 	assert.Equal(t, []int{21, 22, 23}, []int{logs[0].Id, logs[1].Id, logs[2].Id})
 
 	assert.NotPanics(t, func() { assignDisplayLogIds(nil, 0) })
+}
+
+func TestLogDBWriteHealthTracksOutageAndRecovery(t *testing.T) {
+	reset := func() {
+		logDBWriteMu.Lock()
+		defer logDBWriteMu.Unlock()
+		logDBWriteState = LogDBWriteHealth{Healthy: true}
+		logDBWriteReportedAt = time.Time{}
+		logDBWriteSinceReport = 0
+	}
+	reset()
+	t.Cleanup(reset)
+
+	require.True(t, GetLogDBWriteHealth().Healthy, "a fresh tracker must start healthy")
+
+	noteLogDBWrite(errors.New("dial tcp 172.31.15.54:9000: connect: connection refused"))
+	noteLogDBWrite(errors.New("dial tcp 172.31.15.54:9000: connect: connection refused"))
+
+	failing := GetLogDBWriteHealth()
+	assert.False(t, failing.Healthy)
+	assert.EqualValues(t, 2, failing.ConsecutiveFailures)
+	assert.EqualValues(t, 2, failing.TotalFailures)
+	assert.Contains(t, failing.LastError, "connection refused")
+	assert.NotZero(t, failing.FailingSince, "the outage start must be recorded for the report window")
+	assert.NotZero(t, failing.LastFailureAt)
+
+	// Only the first failure of an outage reports; the rest are folded into the
+	// pending count so a sustained outage cannot flood the log.
+	logDBWriteMu.Lock()
+	pending, reportedAt := logDBWriteSinceReport, logDBWriteReportedAt
+	logDBWriteMu.Unlock()
+	assert.EqualValues(t, 1, pending, "failures after the first report must accumulate, not report")
+	assert.False(t, reportedAt.IsZero(), "the first failure must report immediately")
+
+	noteLogDBWrite(nil)
+
+	recovered := GetLogDBWriteHealth()
+	assert.True(t, recovered.Healthy)
+	assert.Zero(t, recovered.ConsecutiveFailures)
+	assert.Zero(t, recovered.FailingSince)
+	assert.NotZero(t, recovered.LastSuccessAt)
+	assert.EqualValues(t, 2, recovered.TotalFailures, "the lifetime failure count must survive recovery")
+
+	// Recovery rearms immediate reporting so the next outage is not silenced by
+	// the previous one's rate limit.
+	logDBWriteMu.Lock()
+	rearmed := logDBWriteReportedAt.IsZero()
+	logDBWriteMu.Unlock()
+	assert.True(t, rearmed)
 }

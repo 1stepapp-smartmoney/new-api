@@ -31,12 +31,15 @@ REPEAT_H="${DISK_ALERT_REPEAT_H:-6}"
 CONF="${DISK_ALERT_CONF:-/etc/nexapi-disk-alert.conf}"
 STATE="${DISK_ALERT_STATE:-/var/lib/nexapi-disk-alert.state}"
 
-MODE="check"
+# ACTION 决定做什么，DRY 决定发不发。两者分开，否则 `--dry-run --test` 这种组合会
+# 因为「后者覆盖前者」真的把消息发出去——空跑命令意外发消息是最不该有的意外。
+ACTION="check"
+DRY=false
 MOUNTS=()
 for arg in "$@"; do
   case "$arg" in
-    --test)    MODE="test" ;;
-    --dry-run) MODE="dry-run" ;;
+    --test)    ACTION="test" ;;
+    --dry-run) DRY=true ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     -*)        echo "ERROR: 未知参数 '$arg'" >&2; exit 2 ;;
     *)         MOUNTS+=("$arg") ;;
@@ -50,7 +53,7 @@ fi
 TOKEN="${TELEGRAM_BOT_TOKEN:-}"
 CHAT="${TELEGRAM_CHAT_ID:-}"
 
-if [ "$MODE" != "dry-run" ]; then
+if [ "$DRY" != true ]; then
   if [ -z "$TOKEN" ] || [ -z "$CHAT" ]; then
     echo "ERROR: 未配置 TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID（找过 $CONF 和环境变量）" >&2
     exit 3
@@ -68,16 +71,20 @@ fi
 # 把 token 放进 curl 的 stdin 配置而不是命令行参数，避免它出现在 ps / 进程列表里。
 send_telegram() {
   local text="$1"
-  if [ "$MODE" = "dry-run" ]; then
+  if [ "$DRY" = true ]; then
     printf '[dry-run] 本应推送：\n%s\n' "$text"
     return 0
   fi
   local body
-  if ! body=$(curl -sS --max-time 20 --config - <<CURLCFG
+  # curl 的配置文件是逐行解析的，值里的换行会被当成行结束——正文是多行的，放进配置
+  # 只会发出第一行。所以只把 URL（唯一含 token、唯一需要避开 ps 的部分）放进 stdin
+  # 配置，chat_id 与正文不是机密，走普通参数。
+  if ! body=$(curl -sS --max-time 20 \
+        --data-urlencode "chat_id=${CHAT}" \
+        --data-urlencode "text=${text}" \
+        --data-urlencode "disable_web_page_preview=true" \
+        --config - <<CURLCFG
 url = "https://api.telegram.org/bot${TOKEN}/sendMessage"
-data-urlencode = "chat_id=${CHAT}"
-data-urlencode = "text=${text}"
-data-urlencode = "disable_web_page_preview=true"
 CURLCFG
   ); then
     echo "ERROR: 调用 Telegram 失败（网络或超时）" >&2
@@ -113,7 +120,7 @@ HOST_LINE="主机：${HOST}"
 [ -n "$ADDRS" ] && HOST_LINE="${HOST_LINE}
 地址：${ADDRS}"
 
-if [ "$MODE" = "test" ]; then
+if [ "$ACTION" = "test" ]; then
   send_telegram "✅ nexapi 磁盘告警测试
 ${HOST_LINE}
 时间：${NOW}
@@ -181,7 +188,7 @@ ${HOST_LINE}
   fi
 done
 
-if [ "$MODE" != "dry-run" ]; then
+if [ "$DRY" != true ]; then
   if ! { for mp in "${!NEXT_STATE[@]}"; do printf '%s %s\n' "$mp" "${NEXT_STATE[$mp]}"; done; } > "$STATE" 2>/dev/null; then
     echo "WARN: 写不了状态文件 $STATE，持续超标时会重复告警" >&2
   fi

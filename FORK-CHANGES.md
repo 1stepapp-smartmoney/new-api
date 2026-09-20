@@ -630,7 +630,11 @@ deployed**. They should remain even if upstream adds similar tooling.
   which expanding it is still cheap. Checks every local ext*/xfs/btrfs mount
   (or the ones named as arguments), alerts at `DISK_ALERT_THRESHOLD` (default
   90%), repeats at most every `DISK_ALERT_REPEAT_H` hours while still over, and
-  sends one recovery message when it drops back. Credentials come from
+  sends one recovery message when it drops back. Each message carries the
+  hostname plus the private and public IP (the latter from EC2 IMDSv2, skipped
+  off-EC2) so the alert names a host you can ssh to — an AWS hostname such as
+  `ip-172-31-15-54.<region>.compute.internal` only embeds the private address
+  by convention and never shows the public one. Credentials come from
   `/etc/nexapi-disk-alert.conf` (`chmod 600`) or the environment, never from
   arguments, and the bot token is passed to `curl` through a stdin config so it
   never appears in `ps`. `--test` verifies the bot wiring, `--dry-run` prints

@@ -93,9 +93,29 @@ CURLCFG
 HOST="$(hostname -f 2>/dev/null || hostname)"
 NOW="$(date -u '+%F %T UTC')"
 
+# 告警要能一眼看出是哪台机。AWS 的主机名形如 ip-172-31-15-54.<region>.compute.internal，
+# 内网 IP 只是凑巧嵌在里面，公网 IP 则完全看不到——收到告警时最需要的恰恰是能直接 ssh
+# 上去的那个地址。内网地址取默认路由出口，公网地址问 EC2 元数据（IMDSv2，非 EC2 或取不到
+# 就跳过，不影响告警本身）。
+PRIVATE_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="src") print $(i+1); exit}')"
+PUBLIC_IP=""
+if IMDS_TOKEN="$(curl -sS --max-time 2 -X PUT "http://169.254.169.254/latest/api/token" \
+      -H "X-aws-ec2-metadata-token-ttl-seconds: 60" 2>/dev/null)" && [ -n "$IMDS_TOKEN" ]; then
+  PUBLIC_IP="$(curl -sS --max-time 2 -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
+      "http://169.254.169.254/latest/meta-data/public-ipv4" 2>/dev/null)"
+  case "$PUBLIC_IP" in *'<'*|*'not found'*) PUBLIC_IP="" ;; esac
+fi
+
+ADDRS=""
+[ -n "$PRIVATE_IP" ] && ADDRS="内网 ${PRIVATE_IP}"
+[ -n "$PUBLIC_IP" ] && ADDRS="${ADDRS:+${ADDRS} | }公网 ${PUBLIC_IP}"
+HOST_LINE="主机：${HOST}"
+[ -n "$ADDRS" ] && HOST_LINE="${HOST_LINE}
+地址：${ADDRS}"
+
 if [ "$MODE" = "test" ]; then
   send_telegram "✅ nexapi 磁盘告警测试
-主机：${HOST}
+${HOST_LINE}
 时间：${NOW}
 阈值：${THRESHOLD}%
 收到这条说明 bot token 与 chat_id 都配好了。"
@@ -144,7 +164,7 @@ for mp in "${MOUNTS[@]}"; do
       continue
     fi
     send_telegram "🔴 磁盘用量告警
-主机：${HOST}
+${HOST_LINE}
 挂载：${mp}
 用量：${used_pct}%（阈值 ${THRESHOLD}%）
 已用/可用/总计：${used} / ${avail} / ${total}
@@ -153,7 +173,7 @@ for mp in "${MOUNTS[@]}"; do
 写满会导致日志与数据写入失败。请尽快扩容或清理。" || RC=1
   elif [ -n "$prev" ]; then
     send_telegram "🟢 磁盘用量已恢复
-主机：${HOST}
+${HOST_LINE}
 挂载：${mp}
 用量：${used_pct}%（阈值 ${THRESHOLD}%）
 可用：${avail} / ${total}

@@ -50,9 +50,19 @@ fi
 TOKEN="${TELEGRAM_BOT_TOKEN:-}"
 CHAT="${TELEGRAM_CHAT_ID:-}"
 
-if [ "$MODE" != "dry-run" ] && { [ -z "$TOKEN" ] || [ -z "$CHAT" ]; }; then
-  echo "ERROR: 未配置 TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID（找过 $CONF 和环境变量）" >&2
-  exit 3
+if [ "$MODE" != "dry-run" ]; then
+  if [ -z "$TOKEN" ] || [ -z "$CHAT" ]; then
+    echo "ERROR: 未配置 TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID（找过 $CONF 和环境变量）" >&2
+    exit 3
+  fi
+  # 装机时会先落一份占位符配置。没填就启用计时器的话，Telegram 只会回一个
+  # 看不懂的 404，这里提前拦下并说清楚原因。
+  case "${TOKEN}${CHAT}" in
+    *REPLACE_ME*)
+      echo "ERROR: $CONF 里仍是占位符，请填入真实的 bot token 与 chat id 后再启用" >&2
+      exit 3
+      ;;
+  esac
 fi
 
 # 把 token 放进 curl 的 stdin 配置而不是命令行参数，避免它出现在 ps / 进程列表里。

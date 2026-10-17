@@ -127,11 +127,11 @@ export function ModelsFilter(props: ModelsFilterProps) {
           setModelOptions(res.data.filter(Boolean))
         }
       })
-      .catch(() => {
-        // 静默失败：模型列表是辅助筛选，不应阻塞其他过滤项
-      })
       .finally(() => {
         if (!cancelled) setModelsLoaded(true)
+      })
+      .catch(() => {
+        // 静默失败：模型列表是辅助筛选，不应阻塞其他过滤项
       })
     return () => {
       cancelled = true

@@ -19,6 +19,49 @@ official upstream solution** that solves the same problem.
 
 > **Recent upstream merges:**
 >
+> - **2026-10-17 → upstream rc.44** (219 commits, merged tag by tag rc.37 →
+>   rc.44). Adoption check: **none of the 9 active fork entries were adopted
+>   upstream — all retained.** rc.37/rc.40/rc.41 merged clean; the rest needed
+>   the fork re-applied on top of upstream refactors:
+>   - **rc.44 replaced the positional `GetAllLogs`/`GetUserLogs` parameters with
+>     a shared `model.LogFilter` + `LogFilter.apply`**, and added a streaming
+>     log export (`ExportAllLogs`/`ExportUserLogs` → `StreamAllLogs`/
+>     `StreamUserLogs`). §4's IP filter and §7's `is_stream` filter became
+>     `LogFilter.Ip`/`LogFilter.IsStream`, read in `logFilterFromQuery`, so the
+>     list and the export honour them alike. **Security fix needed by the
+>     merge:** the export marshals whole `Log` rows, `ip` included. Upstream
+>     records an IP only on a user's opt-in, but §4 records every request's IP
+>     and reserves it for root, so `exportLogs` now strips `ip` for non-root
+>     callers too — otherwise a non-root admin (export all) or a user (export
+>     own) could collect IPs by exporting instead of listing. Covered by the
+>     upstream export DB matrix, extended with §4/§7 cases and verified on
+>     SQLite 3.50.4, MySQL 8.0.46, PostgreSQL 16.15 and ClickHouse 26.8.29.10.
+>   - **rc.44 also requires every `/api` panel route to declare an
+>     access-token scope** (`router/access_token_scope_test.go`). §1's
+>     `GET /api/data/models` is declared `usage:read` in
+>     `middleware/access_token_routes.go`; §10's `POST /api/v3/consumes` and
+>     `GET /api/v1/balance` are listed as exempt (they authenticate a dedicated
+>     API key through `ReconciliationAuth`, never a dashboard credential).
+>   - rc.39 rewrote `common-logs-columns.tsx` (columns now built inside a
+>     `useMemo`); §4's root-only IP column and §9's client-disconnect icon
+>     were grafted onto the new structure. §9 picked up upstream's new
+>     `isSyncTask` prop on `StreamTpsCell`.
+>   - rc.42 null-guarded `scheme?.scheme` in `getDashboardChartColors`; §3
+>     keeps `expandPalette` on top of it.
+>   - rc.43 switched server log lines to `common.LogText` (i18n of server logs
+>     by `DEFAULT_LANGUAGE`); §11's audit-log hook adopted it there. §11's own
+>     report lines stay plain `fmt.Sprintf` — `LogText` only translates, and
+>     nothing enforces it.
+>   - `upstream/main` was 22 commits past rc.44 at merge time; they were left
+>     for the next release, as production only runs tagged releases.
+>
+>   *Tooling notes:* run frontend tests under **Node**, not the `oven/bun`
+>   image: without a `node` binary Bun executes `vitest` itself and four suites
+>   fail to load (`undefined is not an object (evaluating 'z.object')`), while
+>   the same suites pass under `node:22`. `bun run lint` reports ~165 errors
+>   that all predate the fork (identical code upstream); only lint findings in
+>   fork-touched files are ours to fix.
+>
 > - **2026-09-09 → upstream rc.36** (105 commits). Adoption check: the fork's
 >   substantive entries were **not** adopted upstream and are all retained, but
 >   upstream did land its own **root-scoped log views**, so part of §4's frontend
@@ -91,7 +134,9 @@ official upstream solution** that solves the same problem.
   - Backend: `model/usedata.go` (`GetDistinctModelNames`, `model_name` filter
     on `GetAllQuotaDates` / `GetQuotaDataByUsername` / `GetQuotaDataByUserId`
     / `GetQuotaDataGroupByUser`), `controller/usedata.go`
-    (`GetQuotaDataModels`), `router/api-router.go` (`GET /api/data/models`).
+    (`GetQuotaDataModels`), `router/api-router.go` (`GET /api/data/models`),
+    `middleware/access_token_routes.go` (declares that route `usage:read`,
+    like `/api/data/self`, since rc.44 requires every panel route to).
   - Classic UI: `web/classic/src/components/dashboard/modals/SearchModal.jsx`,
     `web/classic/src/hooks/dashboard/useDashboardData.js`,
     `web/classic/src/components/dashboard/index.jsx`.
@@ -165,11 +210,13 @@ official upstream solution** that solves the same problem.
   - Backend: `common/constants.go` (new `ForceRecordIpLog` global),
     `common/init.go` (read `FORCE_RECORD_IP_LOG` env var),
     `model/log.go` (`RecordErrorLog` / `RecordConsumeLog` honour the global
-    before consulting the per-user setting; `GetAllLogs` / `GetUserLogs`
-    accept an `ip` arg with exact-match or wildcard `1.2.*` LIKE),
-    `controller/log.go` (gates `?ip=` on `role >= RoleRootUser` for both
-    `/api/log/` and `/api/log/self`; strips `Log.Ip` from the response for
-    non-root callers and unconditionally for the token-auth
+    before consulting the per-user setting; `LogFilter.Ip`, applied in
+    `LogFilter.apply` with exact-match or wildcard `1.2.*` LIKE, so the list
+    and the export share it),
+    `controller/log.go` (`logFilterFromQuery` reads `?ip=` only when
+    `role >= RoleRootUser`, for `/api/log/`, `/api/log/self` and both
+    exports; strips `Log.Ip` for non-root callers from the list responses
+    **and from every exported row**, and unconditionally for the token-auth
     `GetLogByKey` endpoint).
   - Default UI: root gating comes from upstream's
     `useLogsViewScope().isRootView` (the fork's own `web/src/hooks/use-root.ts`
@@ -185,8 +232,8 @@ official upstream solution** that solves the same problem.
     monospace cell + tooltip + sensitive-visible masking),
     `…/components/dialogs/details-dialog.tsx`
     (`showAdminIp` simplified to `!!log.ip && isRoot`),
-    `…/components/usage-logs-table.tsx` (call `useIsRoot()` and pass
-    through), `web/src/routes/_authenticated/usage-logs/$section.tsx`
+    `…/components/usage-logs-table.tsx` (takes `isRootView` from
+    `useLogsViewScope()` and passes it through), `web/src/routes/_authenticated/usage-logs/$section.tsx`
     (`ip` in search-params zod schema).
   - i18n: new key `"Filter by IP"` across all 6 default-UI locale files.
 - **Behaviour**:
@@ -200,7 +247,9 @@ official upstream solution** that solves the same problem.
     3. don't see the "IP Address" row in the log details dialog,
     4. receive log payloads with the `ip` field empty,
     5. can't bypass via URL: `?ip=` is silently ignored, and the field
-       is stripped from the response.
+       is stripped from the response,
+    6. can't bypass via the log export: exported rows carry an empty `ip`
+       (an admin's "export all" and a user's "export own" alike).
   - Root sees: input filter accepting exact (`157.15.200.38`),
     suffix (`*.108.196`), prefix (`192.169.*`) or arbitrary wildcard
     (`192.169.*`) — the wildcard `*` is converted to a SQL `LIKE %`.
@@ -279,9 +328,10 @@ official upstream solution** that solves the same problem.
 - **Local commit**: same as §6 — single commit `feat(log): add
   is_stream filter ...`.
 - **Touched files**:
-  - Backend: `model/log.go` adds `parseIsStreamFilter()` helper and
-    threads an `isStream` arg into `GetAllLogs` / `GetUserLogs`.
-    `controller/log.go` reads `?is_stream=` from the query string.
+  - Backend: `model/log.go` adds `parseIsStreamFilter()` helper and the
+    `LogFilter.IsStream` field, applied in `LogFilter.apply` (so the log
+    export honours it too). `controller/log.go`'s `logFilterFromQuery`
+    reads `?is_stream=` from the query string.
     Accepted values: `""`/`"all"` (no filter), `"stream"`/`"1"`,
     `"non_stream"`/`"0"`.
   - Default UI: `web/src/features/usage-logs/types.ts` adds
@@ -477,6 +527,9 @@ orchestrator behaviour stays normal during the migration.
   - `model/reconciliation.go`, `dto/reconciliation.go`,
     `controller/reconciliation.go`, `middleware/reconciliation.go`,
     `router/api-router.go`: the endpoints themselves.
+  - `router/access_token_scope_test.go`: both endpoints listed as exempt
+    from the access-token scope table (rc.44 requires every `/api` panel
+    route to declare a scope; these accept only a reconciliation API key).
 - **Kill switch**: the endpoints are **off by default**. Set
   `RECONCILIATION_API_ENABLED=true` to expose them; anything else refuses every
   caller with HTTP 403 / code 1002 before the credential is read, so a disabled

@@ -70,6 +70,12 @@ var accessTokenExemptRoutes = []string{
 	// API key authentication (TokenAuthReadOnly).
 	"GET /api/usage/token/",
 	"GET /api/log/token",
+
+	// fork §10: supplier reconciliation, authenticated by a dedicated
+	// zero-quota API key through ReconciliationAuth, never by a dashboard
+	// credential.
+	"POST /api/v3/consumes",
+	"GET /api/v1/balance",
 }
 
 // accessTokenHelperRoutes are declared through handlePermissionRoute outside

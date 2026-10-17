@@ -7,36 +7,70 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
 )
 
-func GetAllLogs(c *gin.Context) {
-	pageInfo := common.GetPageQuery(c)
+// logFilterFromQuery reads the log search shared by the log list and the log
+// export. Username and channel are read only for administrators.
+func logFilterFromQuery(c *gin.Context, admin bool) model.LogFilter {
 	logType, _ := strconv.Atoi(c.Query("type"))
 	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
-	username := c.Query("username")
-	tokenName := c.Query("token_name")
-	modelName := c.Query("model_name")
-	channel, _ := strconv.Atoi(c.Query("channel"))
-	group := c.Query("group")
-	requestId := c.Query("request_id")
-	upstreamRequestId := c.Query("upstream_request_id")
-	// IP audit is root-only. Non-root admins cannot filter by IP, and the
-	// `ip` field is stripped from the response below. This prevents an admin
-	// from collecting IPs via the JSON payload or URL fuzzing.
-	isRoot := c.GetInt("role") >= common.RoleRootUser
-	ip := ""
-	if isRoot {
-		ip = c.Query("ip")
+	filter := model.LogFilter{
+		Type:              logType,
+		StartTimestamp:    startTimestamp,
+		EndTimestamp:      endTimestamp,
+		ModelName:         c.Query("model_name"),
+		TokenName:         c.Query("token_name"),
+		Group:             c.Query("group"),
+		RequestId:         c.Query("request_id"),
+		UpstreamRequestId: c.Query("upstream_request_id"),
 	}
-	isStream := c.Query("is_stream")
-	logs, total, err := model.GetAllLogs(logType, startTimestamp, endTimestamp, modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, group, requestId, upstreamRequestId, ip, isStream)
+	if admin {
+		filter.Username = c.Query("username")
+		filter.Channel, _ = strconv.Atoi(c.Query("channel"))
+	}
+	// fork §7: stream / non-stream filter, open to every caller of the log list.
+	filter.IsStream = c.Query("is_stream")
+	// fork §4: IP audit is root-only, on the admin list and on /api/log/self
+	// alike. Non-root callers cannot filter by IP, and the ip field is stripped
+	// from their responses, so IPs cannot be collected via the payload or by
+	// fuzzing the query.
+	if c.GetInt("role") >= common.RoleRootUser {
+		filter.Ip = c.Query("ip")
+	}
+	return filter
+}
+
+// limitLogTimeRange returns the start of a log or dashboard search kept within
+// the longest log time range. A missing start reaches back the whole range, and
+// time after now does not count toward it.
+func limitLogTimeRange(startTimestamp int64, endTimestamp int64) (int64, error) {
+	maxRange := operation_setting.GetLogSetting().MaxRangeSeconds()
+	end := common.GetTimestamp()
+	if endTimestamp != 0 {
+		end = min(end, endTimestamp)
+	}
+	if startTimestamp == 0 {
+		return end - maxRange, nil
+	}
+	if end-startTimestamp > maxRange {
+		return 0, common.NewMessage("The time range cannot exceed {{days}} days", map[string]any{"days": maxRange / (24 * 60 * 60)})
+	}
+	return startTimestamp, nil
+}
+
+func GetAllLogs(c *gin.Context) {
+	pageInfo := common.GetPageQuery(c)
+	logs, total, err := model.GetAllLogs(logFilterFromQuery(c, true), pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	isRoot := c.GetInt("role") >= common.RoleRootUser
 	if !isRoot {
 		// fork §4: the IP column is root-only; strip it before returning.
 		for i := range logs {
@@ -54,32 +88,22 @@ func GetAllLogs(c *gin.Context) {
 
 func GetUserLogs(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
-	userId := c.GetInt("id")
-	logType, _ := strconv.Atoi(c.Query("type"))
-	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
-	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
-	tokenName := c.Query("token_name")
-	modelName := c.Query("model_name")
-	group := c.Query("group")
-	requestId := c.Query("request_id")
-	upstreamRequestId := c.Query("upstream_request_id")
-	// Self-log endpoint: even though it only returns the caller's own rows,
-	// IP audit is reserved for the root operator. Regular and even admin
-	// users hitting /api/log/self cannot use the IP filter and cannot read
-	// the IP field from their own logs. This keeps "is the operator tracking
-	// my IP?" off the user surface entirely.
-	isRoot := c.GetInt("role") >= common.RoleRootUser
-	ip := ""
-	if isRoot {
-		ip = c.Query("ip")
+	filter := logFilterFromQuery(c, false)
+	if c.GetInt("role") < common.RoleAdminUser {
+		startTimestamp, err := limitLogTimeRange(filter.StartTimestamp, filter.EndTimestamp)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		filter.StartTimestamp = startTimestamp
 	}
-	isStream := c.Query("is_stream")
-	logs, total, err := model.GetUserLogs(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), group, requestId, upstreamRequestId, ip, isStream)
+	logs, total, err := model.GetUserLogs(c.GetInt("id"), filter, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	if !isRoot {
+	// fork §4: IP audit stays root-only on the self-log endpoint too.
+	if c.GetInt("role") < common.RoleRootUser {
 		for i := range logs {
 			logs[i].Ip = ""
 		}
@@ -88,6 +112,89 @@ func GetUserLogs(c *gin.Context) {
 	pageInfo.SetItems(logs)
 	common.ApiSuccess(c, pageInfo)
 	return
+}
+
+// ExportAllLogs streams every user's logs matching the search.
+func ExportAllLogs(c *gin.Context) {
+	exportLogs(c, true)
+}
+
+// ExportUserLogs streams the caller's own logs matching the search.
+func ExportUserLogs(c *gin.Context) {
+	if c.GetInt("role") < common.RoleAdminUser && !operation_setting.GetLogSetting().UserExportEnabled {
+		common.ApiErrorT(c, "Log export is disabled")
+		return
+	}
+	exportLogs(c, false)
+}
+
+// exportLogs writes one JSON log per line, newest first, and ends with an API
+// response object: success with the log count, or the failure. Each user runs
+// one export at a time, and every export stays within the longest log time
+// range.
+func exportLogs(c *gin.Context, all bool) {
+	filter := logFilterFromQuery(c, all)
+	startTimestamp, err := limitLogTimeRange(filter.StartTimestamp, filter.EndTimestamp)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	filter.StartTimestamp = startTimestamp
+
+	userId := c.GetInt("id")
+	release, ok, err := service.AcquireLogExportLock(userId)
+	if err != nil {
+		common.SysError(common.LogText("failed to lock log export: %s", err.Error()))
+		common.ApiErrorT(c, "Failed to export logs")
+		return
+	}
+	if !ok {
+		common.ApiErrorT(c, "Another log export is running. Try again after it finishes.")
+		return
+	}
+	defer release()
+
+	c.Header("Content-Type", "application/x-ndjson; charset=utf-8")
+	c.Header("Cache-Control", "no-store")
+	c.Header("X-Accel-Buffering", "no")
+	c.Status(http.StatusOK)
+
+	count := 0
+	// fork §4: every request records its client IP and only root may read it.
+	// The export marshals whole rows, so it must strip the IP exactly like the
+	// list endpoints do, or a non-root admin or a user could collect IPs by
+	// exporting instead of listing.
+	isRoot := c.GetInt("role") >= common.RoleRootUser
+	writeLog := func(log *model.Log) error {
+		if !isRoot {
+			log.Ip = ""
+		}
+		line, err := common.Marshal(log)
+		if err != nil {
+			return err
+		}
+		if _, err := c.Writer.Write(append(line, '\n')); err != nil {
+			return err
+		}
+		count++
+		return nil
+	}
+	ctx := c.Request.Context()
+	if all {
+		err = model.StreamAllLogs(ctx, filter, c.GetInt("role"), writeLog)
+	} else {
+		err = model.StreamUserLogs(ctx, userId, filter, writeLog)
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	// The status is already sent, so the result object becomes the last line.
+	if err != nil {
+		common.SysError(common.LogText("failed to export logs: %s", err.Error()))
+		common.ApiErrorT(c, "Failed to export logs")
+		return
+	}
+	common.ApiSuccess(c, gin.H{"count": count})
 }
 
 // Deprecated: SearchAllLogs 已废弃，前端未使用该接口。
@@ -157,6 +264,13 @@ func GetLogsSelfStat(c *gin.Context) {
 	logType, _ := strconv.Atoi(c.Query("type"))
 	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
+	if c.GetInt("role") < common.RoleAdminUser {
+		var err error
+		if startTimestamp, err = limitLogTimeRange(startTimestamp, endTimestamp); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
 	tokenName := c.Query("token_name")
 	modelName := c.Query("model_name")
 	channel, _ := strconv.Atoi(c.Query("channel"))

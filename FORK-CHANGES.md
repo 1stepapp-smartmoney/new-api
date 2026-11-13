@@ -19,6 +19,27 @@ official upstream solution** that solves the same problem.
 
 > **Recent upstream merges:**
 >
+> - **2026-11-13 → upstream rc.50** (150 commits, tag `v1.0.0-rc.50`, direct
+>   merge; rc.45–rc.50 skipped as tags). Adoption check: **none of the active
+>   fork entries were adopted upstream — all retained.** Only one textual
+>   conflict: `model/usedata.go` (§1) — upstream added `cache_read_tokens`/
+>   `cache_creation_tokens` aggregation to the four quota_data queries; the
+>   fork's conditional `model_name = ?` structure was kept with upstream's new
+>   columns layered in. Notable auto-merges verified by marker counts:
+>   §8 telemetry survived upstream's stream_scanner rewrite (the new ping
+>   goroutine adds its own disconnect watch; the main-loop `Context.Done()` case
+>   still carries `MarkClientGone`), §1's `models-filter-dialog.tsx` moved to
+>   `components/models/` and the rename carried `min-w-[20rem]`/
+>   `getQuotaDataModels`/`ALL_MODELS_VALUE` with it, §3 moved to
+>   `dashboard/lib/charts.ts` (`expandPalette` intact), §10's
+>   `platform_request_id` column and middleware untouched. Six fork i18n keys
+>   (All Modes / Data Filters / Filter by IP / Filter by model / Non-Stream
+>   Only / Stream Only) were missing from `zh-TW.json` since earlier merges and
+>   are now added, completing all seven locale files. OOM context: rc.50 brings
+>   upstream's own body-pipeline memory work (`common/body_storage.go` disk
+>   mode, moego zero-copy parse, per-attempt outbound cursors, h2 health
+>   checks) — Tokyo heap profile re-measure pending before deciding whether the
+>   `Content`-boxing fix is still needed.
 > - **2026-10-17 → upstream rc.44** (219 commits, merged tag by tag rc.37 →
 >   rc.44). Adoption check: **none of the 9 active fork entries were adopted
 >   upstream — all retained.** rc.37/rc.40/rc.41 merged clean; the rest needed

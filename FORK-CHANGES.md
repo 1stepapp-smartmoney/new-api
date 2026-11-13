@@ -702,6 +702,20 @@ deployed**. They should remain even if upstream adds similar tooling.
   ```
   The unit is a plain `Type=oneshot` running the script, with an
   `OnUnitActiveSec=5min` timer. Deployed on the ClickHouse host
+
+- `scripts/alert_bot.py` — subscription-code distributor for the same Telegram
+  bot (@nexapi_infra_bot), installed as `/usr/local/bin/nexapi-alert-bot` with
+  an `nexapi-alert-bot.service` systemd unit. Alerts broadcast to every
+  subscriber, but subscribing requires a one-time code: the admin
+  (`ADMIN_CHAT_ID` in the shared conf) runs `/newcode [备注]`, hands the code
+  to the recipient, and the code dies on first use (`/codes`, `/subs`, `/rm`,
+  `/broadcast` manage the pool). State lives in
+  `/var/lib/nexapi-alert-bot/`; `targets.txt` there (admin + subscribers, one
+  chat_id per line) is the broadcast contract — `disk-alert.sh` and the
+  per-host `oom-telegram-notify` both read it and fall back to the single
+  `TELEGRAM_CHAT_ID` when the bot is not deployed. Same credentials file and
+  ps-safe sending as disk-alert; added 2026-11-13 after the Tokyo OOM loop
+  showed alerts needed more than one recipient.
   (`/var/lib/clickhouse`, the volume that filled on 2026-09-18) and on the app
   hosts. Note this is host-level tooling: it is deliberately **not** wired into
   the Go binary, so it keeps working when new-api itself is down.

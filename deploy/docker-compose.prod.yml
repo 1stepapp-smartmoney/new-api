@@ -26,15 +26,19 @@ services:
     image: zjlywjh001/nexapi:latest
     pull_policy: always
     container_name: new-api
+    # Auto-restart on OOM (2026-11-13, deliberately reverted from restart "no"):
+    # availability first; the per-kill billing drift (in-flight upstream usage
+    # lost at SIGKILL) is bounded by fixing the memory, not by staying down.
+    # oom-telegram-notify.service on the host alerts on every OOM kill.
     restart: always
     command: --log-dir /app/logs
     # Hard ceiling so a runaway heap kills only this container (restart: always
     # brings it back) instead of driving the whole host into kernel OOM. Keep
     # GOMEMLIMIT in `.env` several GB BELOW this value, so Go's GC turns
     # aggressive and settles the heap before Docker ever has to intervene.
-    # Per-site value: Tokyo (62 GiB box, single site) uses 40g; each us-west-2
+    # Per-site value: Tokyo (124 GiB box, single site) uses 110g; each us-west-2
     # site uses 24g because two sites share one 64 GiB box.
-    mem_limit: 40g
+    mem_limit: 110g
     env_file:
       - .env
     ports:

@@ -25,13 +25,13 @@ Three application instances, all running the same image:
 
 | Site | Host | Directory | Container | Published port | `mem_limit` |
 |---|---|---|---|---|---|
-| Tokyo | `ubuntu@54.64.192.229` | `~/nexapi-docker` | `new-api` | `3000:3000` | 40g |
+| Tokyo | `ubuntu@54.64.192.229` | `~/nexapi-docker` | `new-api` | `3000:3000` | 110g |
 | us-west-2 A | `ubuntu@52.41.195.28` | `~/nexapi-a` | `new-api-a` | `127.0.0.1:3000:3000` | 24g |
 | us-west-2 B | `ubuntu@52.41.195.28` | `~/nexapi-b` | `new-api-b` | `127.0.0.1:3001:3000` | 24g |
 
 The two us-west-2 sites are **billing-independent** (separate databases and log
 databases) but reuse the Tokyo RDS/ClickHouse over an inter-region VPC peering.
-They share one 64 GiB box, hence 24g each; Tokyo has its 62 GiB box to itself.
+They share one 64 GiB box, hence 24g each; Tokyo has its 124 GiB box to itself (upsized 2026-11-13 after the big-body relay load OOM-cycled at 40g).
 
 `deploy/docker-compose.prod.yml` is the **canonical copy and matches Tokyo
 verbatim**. The us-west-2 files differ only in the three columns above.

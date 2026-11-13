@@ -14,7 +14,10 @@
 # 配置：把凭证写进 /etc/nexapi-disk-alert.conf（root 只读，chmod 600），格式：
 #   TELEGRAM_BOT_TOKEN=123456:AA...
 #   TELEGRAM_CHAT_ID=-1001234567890
-# 也可以直接用同名环境变量覆盖。凭证只从文件/环境读取，脚本不会把它打印出来，
+#   ADMIN_CHAT_ID=同上的管理员 chat_id（alert_bot 管理命令仅此 id 可用）
+# 也可以直接用同名环境变量覆盖。推送目标是全部订阅者（订阅码机制见
+# scripts/alert_bot.py，清单在 /var/lib/nexapi-alert-bot/targets.txt），bot
+# 未部署时回退到 TELEGRAM_CHAT_ID 单发。凭证只从文件/环境读取，脚本不会把它打印出来，
 # 也不会出现在 ps 的命令行里（curl 通过 stdin 配置读 URL）。
 #
 # 可调参数（环境变量）：
@@ -69,32 +72,48 @@ if [ "$DRY" != true ]; then
 fi
 
 # 把 token 放进 curl 的 stdin 配置而不是命令行参数，避免它出现在 ps / 进程列表里。
+# 广播目标：alert_bot（scripts/alert_bot.py）维护的订阅者清单；bot 没部署时
+# 回退到 conf 里单一 TELEGRAM_CHAT_ID。每行一个 chat_id，管理员在首位。
+alert_targets() {
+  if [ -s /var/lib/nexapi-alert-bot/targets.txt ]; then
+    cat /var/lib/nexapi-alert-bot/targets.txt
+  else
+    printf '%s\n' "$CHAT"
+  fi
+}
+
 send_telegram() {
   local text="$1"
   if [ "$DRY" = true ]; then
-    printf '[dry-run] 本应推送：\n%s\n' "$text"
+    printf '[dry-run] 本应推送给以下目标：\n%s\n%s\n' "$(alert_targets)" "$text"
     return 0
   fi
-  local body
-  # curl 的配置文件是逐行解析的，值里的换行会被当成行结束——正文是多行的，放进配置
-  # 只会发出第一行。所以只把 URL（唯一含 token、唯一需要避开 ps 的部分）放进 stdin
-  # 配置，chat_id 与正文不是机密，走普通参数。
-  if ! body=$(curl -sS --max-time 20 \
-        --data-urlencode "chat_id=${CHAT}" \
-        --data-urlencode "text=${text}" \
-        --data-urlencode "disable_web_page_preview=true" \
-        --config - <<CURLCFG
+  local target body failed=0 total=0
+  while IFS= read -r target; do
+    [ -z "$target" ] && continue
+    total=$((total + 1))
+    # curl 的配置文件是逐行解析的，值里的换行会被当成行结束——正文是多行的，放进配置
+    # 只会发出第一行。所以只把 URL（唯一含 token、唯一需要避开 ps 的部分）放进 stdin
+    # 配置，chat_id 与正文不是机密，走普通参数。
+    if ! body=$(curl -sS --max-time 20 \
+          --data-urlencode "chat_id=${target}" \
+          --data-urlencode "text=${text}" \
+          --data-urlencode "disable_web_page_preview=true" \
+          --config - <<CURLCFG
 url = "https://api.telegram.org/bot${TOKEN}/sendMessage"
 CURLCFG
-  ); then
-    echo "ERROR: 调用 Telegram 失败（网络或超时）" >&2
-    return 1
-  fi
-  case "$body" in
-    *'"ok":true'*) return 0 ;;
-    # 失败原因里可能带回 chat_id，但不会带 token；原样输出便于排查配错的 chat。
-    *) echo "ERROR: Telegram 拒绝了这条消息：$body" >&2; return 1 ;;
-  esac
+    ); then
+      echo "ERROR: 调用 Telegram 失败（网络或超时）target=${target}" >&2
+      failed=$((failed + 1)); continue
+    fi
+    case "$body" in
+      *'"ok":true'*) ;;
+      # 失败原因里可能带回 chat_id，但不会带 token；原样输出便于排查配错的 chat。
+      *) echo "ERROR: Telegram 拒绝了这条消息 target=${target}：$body" >&2
+         failed=$((failed + 1)) ;;
+    esac
+  done < <(alert_targets)
+  [ "$failed" -eq 0 ] || { echo "ERROR: ${failed}/${total} 个目标发送失败" >&2; return 1; }
 }
 
 HOST="$(hostname -f 2>/dev/null || hostname)"

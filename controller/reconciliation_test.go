@@ -18,10 +18,21 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/mysql"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
+
+// openReconciliationMemoryDB opens a private in-memory SQLite database. One
+// connection keeps every query on the same in-memory database.
+func openReconciliationMemoryDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+	return db
+}
 
 // TestReconciliationAPI covers the supplier reconciliation contract (fork §10):
 // the correlation id the caller reconciles on, offset-cursor paging, the window
@@ -31,50 +42,28 @@ import (
 func TestReconciliationAPI(t *testing.T) {
 	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
 		t.Run(dialect, func(t *testing.T) {
-			var driver, logDriver gorm.Dialector
+			var db, logDB *gorm.DB
 			dbType := common.DatabaseTypeSQLite
 			switch dialect {
 			case "sqlite":
-				driver = sqlite.Open(":memory:")
-				logDriver = sqlite.Open(":memory:")
-			case "mysql":
-				dsn := os.Getenv("TEST_MYSQL_DSN")
+				db, logDB = openReconciliationMemoryDB(t), openReconciliationMemoryDB(t)
+			case "mysql", "postgres":
+				env, typ := "TEST_MYSQL_DSN", common.DatabaseTypeMySQL
+				if dialect == "postgres" {
+					env, typ = "TEST_POSTGRES_DSN", common.DatabaseTypePostgreSQL
+				}
+				dsn := os.Getenv(env)
 				if dsn == "" {
-					t.Skip("TEST_MYSQL_DSN is not configured")
+					t.Skip(env + " is not configured")
 				}
-				driver = mysql.Open(dsn)
-				logDSN := os.Getenv("TEST_MYSQL_LOG_DSN")
-				if logDSN == "" {
-					logDSN = dsn
-				}
-				logDriver = mysql.Open(logDSN)
-				dbType = common.DatabaseTypeMySQL
-			case "postgres":
-				dsn := os.Getenv("TEST_POSTGRES_DSN")
-				if dsn == "" {
-					t.Skip("TEST_POSTGRES_DSN is not configured")
-				}
-				driver = postgres.Open(dsn)
-				logDSN := os.Getenv("TEST_POSTGRES_LOG_DSN")
-				if logDSN == "" {
-					logDSN = dsn
-				}
-				logDriver = postgres.Open(logDSN)
-				dbType = common.DatabaseTypePostgreSQL
+				// TEST_*_DSN is shared with every other database test, and go
+				// test runs packages in parallel, so tables another test leaves
+				// behind would collide with ours. Each run gets its own main
+				// and log databases instead.
+				db, _ = newAuditTestDatabase(t, dialect, dsn)
+				logDB, _ = newAuditTestDatabase(t, dialect, dsn)
+				dbType = typ
 			}
-			db, err := gorm.Open(driver, &gorm.Config{})
-			require.NoError(t, err)
-			sqlDB, err := db.DB()
-			require.NoError(t, err)
-			sqlDB.SetMaxOpenConns(1)
-			t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
-
-			logDB, err := gorm.Open(logDriver, &gorm.Config{})
-			require.NoError(t, err)
-			logSQL, err := logDB.DB()
-			require.NoError(t, err)
-			logSQL.SetMaxOpenConns(1)
-			t.Cleanup(func() { require.NoError(t, logSQL.Close()) })
 
 			previousDB, previousLogDB := model.DB, model.LOG_DB
 			previousMain, previousLog := common.MainDatabaseType(), common.LogDatabaseType()

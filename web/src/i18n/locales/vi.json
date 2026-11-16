@@ -7733,6 +7733,11 @@
     "Zhipu V4": "Zhipu V4",
     "Zoom": "Zoom",
     "By clicking sign in, you agree to our": "Bằng cách nhấp đăng nhập, bạn đồng ý với",
-    "By creating an account, you agree to our": "Bằng cách tạo tài khoản, bạn đồng ý với"
+    "By creating an account, you agree to our": "Bằng cách tạo tài khoản, bạn đồng ý với",
+    "Client Disconnect": "Client ngắt kết nối",
+    "Client Disconnected": "Client đã ngắt kết nối",
+    "Disconnect Error": "Lỗi ngắt kết nối",
+    "Disconnect at": "Ngắt kết nối sau",
+    "Disconnect at Chunks": "Số chunk đã gửi trước khi ngắt"
   }
 }

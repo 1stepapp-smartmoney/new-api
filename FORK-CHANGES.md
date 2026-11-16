@@ -476,6 +476,10 @@ official upstream solution** that solves the same problem.
     is true. Coexists with the existing red `CircleAlert` (gated on
     `stream_status.status !== 'ok'`) — both can appear on the same
     row, conveying "stream errored AND client was already gone".
+  - i18n: `Client Disconnect`, `Client Disconnected`, `Disconnect Error`,
+    `Disconnect at`, `Disconnect at Chunks` in all seven locale files.
+    These were missing until 2026-11-16, so every language showed the
+    English labels.
 - **Effect**: Historical rows automatically benefit — every
   `end_reason='client_gone'` row now shows disconnect timing in the
   UI without DB migration.

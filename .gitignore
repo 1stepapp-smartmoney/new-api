@@ -49,3 +49,5 @@ go.work.sum
 
 # 运维迁移文档(不入库,含拓扑)
 MIGRATION-RUNBOOK.md
+# 运维会话总结(不入库,含主机地址、账号与营收数据)
+SESSION-SUMMARY-*.md

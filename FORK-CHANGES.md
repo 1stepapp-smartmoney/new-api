@@ -722,12 +722,21 @@ deployed**. They should remain even if upstream adds similar tooling.
   sudo install -m 600 /dev/stdin /etc/nexapi-disk-alert.conf <<'CONF'
   TELEGRAM_BOT_TOKEN=<token>
   TELEGRAM_CHAT_ID=<chat id>
+  ADMIN_CHAT_ID=<chat id>   # only needed where the alert bot runs
   CONF
   sudo systemctl enable --now nexapi-disk-alert.timer   # unit + timer: see below
   ```
   The unit is a plain `Type=oneshot` running the script, with an
   `OnUnitActiveSec=5min` timer. Deployed on the ClickHouse host
-
+  (`/var/lib/clickhouse`, the volume that filled on 2026-09-18; reachable
+  over ssh at its public address only) since 2026-09-20, and on the Tokyo app
+  host since 2026-11-13. The us-west-2 host has the script and units
+  installed but disabled. The ClickHouse host still runs the pre-broadcast
+  version, which sends to its single `TELEGRAM_CHAT_ID`; it has no alert bot,
+  so the current version would behave the same there. The shared conf now
+  also carries `ADMIN_CHAT_ID` for the alert bot below. Note this is
+  host-level tooling: it is deliberately **not** wired into the Go binary, so
+  it keeps working when new-api itself is down.
 - `scripts/alert_bot.py` — subscription-code distributor for the same Telegram
   bot (@nexapi_infra_bot), installed as `/usr/local/bin/nexapi-alert-bot` with
   an `nexapi-alert-bot.service` systemd unit. Alerts broadcast to every
@@ -740,10 +749,38 @@ deployed**. They should remain even if upstream adds similar tooling.
   per-host `oom-telegram-notify` both read it and fall back to the single
   `TELEGRAM_CHAT_ID` when the bot is not deployed. Same credentials file and
   ps-safe sending as disk-alert; added 2026-11-13 after the Tokyo OOM loop
-  showed alerts needed more than one recipient.
-  (`/var/lib/clickhouse`, the volume that filled on 2026-09-18) and on the app
-  hosts. Note this is host-level tooling: it is deliberately **not** wired into
-  the Go binary, so it keeps working when new-api itself is down.
+  showed alerts needed more than one recipient. Every state file, and
+  `targets.txt` above all, is written to a temp file and renamed into place:
+  the notifiers read the list at arbitrary moments, and a reader that caught a
+  truncated file would send to nobody. Codes are matched case-insensitively,
+  and an unused code is never written to the journal in full.
+- `scripts/oom-telegram-notify.sh` — daemon that watches `docker events` for
+  an OOM kill of the `new-api` container and broadcasts it to the same
+  `targets.txt` (fallback `TELEGRAM_CHAT_ID`), at most once per 60 s
+  (`OOM_ALERT_THROTTLE`), reconnecting if the event stream drops. Added
+  2026-11-13: the Tokyo container was being OOM-killed every 1–3 minutes and
+  `restart: always` hid it until the dashboard and the logs disagreed. Same
+  conf and ps-safe sending as disk-alert (the first deployed copy put the bot
+  token in curl's argv; fixed 2026-11-16). Both notifiers report an error when
+  they end up with no target at all, rather than succeeding silently. Runs on
+  the Tokyo app host as a plain long-running unit:
+  ```ini
+  # /etc/systemd/system/oom-telegram-notify.service
+  [Unit]
+  Description=Telegram notify on new-api container OOM kill
+  After=docker.service
+  Wants=docker.service
+
+  [Service]
+  Type=simple
+  ExecStart=/usr/local/bin/oom-telegram-notify.sh
+  Restart=always
+  RestartSec=5
+  User=root
+
+  [Install]
+  WantedBy=multi-user.target
+  ```
 - `deploy/docker-compose.prod.yml` — tracked copy of the **production**
   compose file (nexapi.org, AWS RDS MySQL + ClickHouse logs + Valkey cache).
   The root `docker-compose.yml` is the upstream demo template with bundled

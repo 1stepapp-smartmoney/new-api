@@ -83,12 +83,20 @@ def load_json(path, default):
         return default
 
 
-def save_json(path, obj):
+def write_atomic(path, text, mode=0o600):
+    """写临时文件再 rename：读者要么看到旧内容，要么看到新内容，不会读到
+    截断到一半的文件。targets.txt 尤其如此——disk-alert / oom 通知在任意
+    时刻读它，读到空文件就等于这条告警谁也没发。"""
     os.makedirs(STATE_DIR, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=STATE_DIR)
     with os.fdopen(fd, "w") as f:
-        json.dump(obj, f, ensure_ascii=False, indent=1)
+        f.write(text)
+    os.chmod(tmp, mode)
     os.replace(tmp, path)
+
+
+def save_json(path, obj):
+    write_atomic(path, json.dumps(obj, ensure_ascii=False, indent=1))
 
 
 def api(token, method, **params):
@@ -155,9 +163,7 @@ class Bot:
             if cid not in seen:
                 targets.append(cid)
                 seen.add(cid)
-        os.makedirs(STATE_DIR, exist_ok=True)
-        with open(TARGETS_FILE, "w") as f:
-            f.write("\n".join(targets) + "\n")
+        write_atomic(TARGETS_FILE, "\n".join(targets) + "\n", mode=0o644)
         return targets
 
     def drop_subscriber(self, chat, reason=""):
@@ -242,7 +248,8 @@ class Bot:
                 f"确认是管理员后写入 {CONF} 的 ADMIN_CHAT_ID")
 
         if cmd in ("/start", "/help"):
-            if len(argv) > 1 and CODE_RE.match(argv[1]):
+            # 订阅码不区分大小写：手机输入法常自动改成小写或首字母大写。
+            if len(argv) > 1 and CODE_RE.match(argv[1].upper()):
                 self.redeem(chat, name, argv[1].upper())
             else:
                 self.show_welcome(chat)
@@ -253,7 +260,7 @@ class Bot:
                 return
             self.admin_cmd(chat, cmd, argv[1:])
             return
-        if text and CODE_RE.match(text):
+        if text and CODE_RE.match(text.upper()):
             self.redeem(chat, name, text.upper())
             return
         if not self.admin:
@@ -298,7 +305,8 @@ class Bot:
                       f"备注：{note or '(无)'}\n"
                       "把它发给要订阅的人；每个码只能用一次。",
                       reply_markup=keyboard([[("📋 再生成一个", "cmd:newcode")]]))
-            log(f"new code {code} note={note}")
+            # 未使用的码等同凭据：journal 对 adm 组可读，不落完整码。
+            log(f"new code {code[:2]}****** note={note}")
         elif cmd == "/codes":
             codes = load_json(CODES_FILE, {})
             unused = [c for c, e in codes.items() if not e.get("used_by")]

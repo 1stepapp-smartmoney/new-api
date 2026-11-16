@@ -74,9 +74,12 @@ fi
 # 把 token 放进 curl 的 stdin 配置而不是命令行参数，避免它出现在 ps / 进程列表里。
 # 广播目标：alert_bot（scripts/alert_bot.py）维护的订阅者清单；bot 没部署时
 # 回退到 conf 里单一 TELEGRAM_CHAT_ID。每行一个 chat_id，管理员在首位。
+# 清单只读一次：先判断「非空」再 cat 是两次读，中间若被改写就会读到空清单。
 alert_targets() {
-  if [ -s /var/lib/nexapi-alert-bot/targets.txt ]; then
-    cat /var/lib/nexapi-alert-bot/targets.txt
+  local listed
+  listed=$(cat /var/lib/nexapi-alert-bot/targets.txt 2>/dev/null)
+  if [ -n "$listed" ]; then
+    printf '%s\n' "$listed"
   else
     printf '%s\n' "$CHAT"
   fi
@@ -113,6 +116,8 @@ CURLCFG
          failed=$((failed + 1)) ;;
     esac
   done < <(alert_targets)
+  # 一个目标都没有等于告警没发出去，必须报错，不能当成功。
+  [ "$total" -gt 0 ] || { echo "ERROR: 没有任何推送目标，告警未发出" >&2; return 1; }
   [ "$failed" -eq 0 ] || { echo "ERROR: ${failed}/${total} 个目标发送失败" >&2; return 1; }
 }
 

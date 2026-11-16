@@ -731,10 +731,10 @@ deployed**. They should remain even if upstream adds similar tooling.
   (`/var/lib/clickhouse`, the volume that filled on 2026-09-18; reachable
   over ssh at its public address only) since 2026-09-20, and on the Tokyo app
   host since 2026-11-13. The us-west-2 host has the script and units
-  installed but disabled. The ClickHouse host still runs the pre-broadcast
-  version, which sends to its single `TELEGRAM_CHAT_ID`; it has no alert bot,
-  so the current version would behave the same there. The shared conf now
-  also carries `ADMIN_CHAT_ID` for the alert bot below. Note this is
+  installed but disabled. Both enabled hosts broadcast to every subscriber:
+  Tokyo reads the alert bot's list directly, and the ClickHouse host receives
+  a copy through `alert-targets-sync.sh` below. The shared conf also carries
+  `ADMIN_CHAT_ID` where the alert bot runs. Note this is
   host-level tooling: it is deliberately **not** wired into the Go binary, so
   it keeps working when new-api itself is down.
 - `scripts/alert_bot.py` — subscription-code distributor for the same Telegram
@@ -781,6 +781,36 @@ deployed**. They should remain even if upstream adds similar tooling.
   [Install]
   WantedBy=multi-user.target
   ```
+- `scripts/alert-targets-sync.sh` — copies the alert bot's `targets.txt` to
+  hosts that only run notifiers, so their alerts reach every subscriber and
+  not just `TELEGRAM_CHAT_ID`. Added 2026-11-16 for the ClickHouse host, whose
+  disk filling up on 2026-09-18 is exactly the alert that must not reach a
+  single person only. A second bot process there is not an option: Telegram
+  delivers a bot's updates to one poller only. The bot host **pushes**
+  (`push`); the receiver never pulls, since pulling would put a credential for
+  the bot host — which holds every production secret — on the receiver. The
+  receiver runs `receive` as an ssh forced command under a dedicated locked
+  account and accepts only a list of chat ids (≤200 lines, ≤8 KiB, nothing
+  else), replacing its copy atomically; anything else is rejected and the old
+  list kept. Setup:
+  - ClickHouse host: `nexapi-alert-targets-sync` in `/usr/local/bin`; system
+    user `alertsync` (shell `/bin/sh`, password locked) owning
+    `/var/lib/nexapi-alert-bot`; its `~/.ssh/authorized_keys` holds one line,
+    `restrict,from="172.31.6.19",command="/usr/local/bin/nexapi-alert-targets-sync receive" ssh-ed25519 …`.
+    Verified that arbitrary commands, port forwarding and a malformed list
+    are all refused.
+  - Tokyo: push key `/root/.ssh/nexapi-alert-sync` (ed25519, root, 600); the
+    receiver's host key pinned in `/root/.ssh/known_hosts` after comparing its
+    fingerprint with the one read over the already-trusted public-address
+    session (`StrictHostKeyChecking=yes`, a new key is never accepted
+    silently). `nexapi-alert-targets-push.service` (oneshot, `push`) is
+    started by `nexapi-alert-targets-push.path`
+    (`PathChanged=/var/lib/nexapi-alert-bot/targets.txt`, which also fires on
+    the bot's write-and-rename) and re-run hourly by
+    `nexapi-alert-targets-push.timer` (`OnBootSec=5min`,
+    `OnUnitActiveSec=1h`) in case a push was missed while the receiver was
+    down. If Tokyo itself is down the receiver keeps its last list, which is
+    when its alerts matter most.
 - `deploy/docker-compose.prod.yml` — tracked copy of the **production**
   compose file (nexapi.org, AWS RDS MySQL + ClickHouse logs + Valkey cache).
   The root `docker-compose.yml` is the upstream demo template with bundled
